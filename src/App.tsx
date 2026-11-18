@@ -28,7 +28,8 @@ import { filesToTracks, isAudioFile } from './services/localFiles';
 function Toast() {
   const notice = usePlayer((s) => s.notice);
   return (
-    <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-[118px] z-[45] flex justify-center px-6">
+    // sits just above the player bar (never on top of it)
+    <div aria-live="polite" role="status" className="pointer-events-none fixed inset-x-0 bottom-[196px] z-[45] flex justify-center px-6 max-md:bottom-[150px]">
       <AnimatePresence>
         {notice && (
           <motion.div

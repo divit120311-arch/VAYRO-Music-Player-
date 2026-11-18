@@ -80,3 +80,22 @@ not ready for public distribution. To remove the warning:
 
 electron-builder then signs with your Developer ID, notarizes with Apple, and staples the ticket.
 Gatekeeper opens the app with no warning.
+
+## Publishing the installers (so "Download for Mac" works)
+
+The site's download button reads the **latest GitHub Release** (see `src/config/downloads.ts`).
+To publish one, push a version tag. In GitHub Desktop: **History** → right-click the newest commit
+→ **Create Tag…** → `v1.0.0` → **Push origin**. The "Desktop app" workflow then builds all three
+installers and attaches them to a Release named `Vayro v1.0.0`:
+`Vayro-mac-apple-silicon.dmg`, `Vayro-mac-intel.dmg` and `Vayro-windows-setup.exe`.
+
+Visitors can only download Release files from a **public** repository. If you keep the code
+private:
+
+1. Create a second, **public** repository, for example `vayro-releases`, with a README so it
+   isn't empty.
+2. Create a fine-grained GitHub token with **Contents: Read and write** on that repository.
+3. In the code repository, under Settings → Secrets and variables → Actions:
+   - add the variable `RELEASES_REPO` = `your-name/vayro-releases`;
+   - add the secret `RELEASES_TOKEN` = the token.
+4. In `src/config/downloads.ts`, set `GITHUB_RELEASES` to that repository.

@@ -1,39 +1,46 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Cpu, Download, Laptop } from 'lucide-react';
-import { IN_DESKTOP_APP, MAC_DOWNLOADS } from '../config/downloads';
+import { Cpu, Download, Laptop, Monitor } from 'lucide-react';
+import { APP_FILES, GITHUB_RELEASES, IN_DESKTOP_APP, type AppBuild } from '../config/downloads';
 import { notify } from '../state/player';
 
 /**
- * "Download for Mac": a small menu with the two Mac builds (a website can't reliably tell an
- * Apple Silicon Mac from an Intel one). Before downloading it checks the file is really there, so a
- * missing upload shows a clear message instead of a broken download. Hidden inside the desktop app.
+ * "Download for Mac": the Mac builds (a website can't reliably tell an Apple Silicon Mac from an
+ * Intel one) and the Windows installer. The files come from the repository's latest GitHub Release:
+ * GitHub's API answers websites directly (CORS), so before downloading we can check the file is
+ * really published and say so plainly if it isn't. Hidden inside the desktop app.
+ *
+ * Other parts of the page can open this menu with a `vayro:need-app` window event (e.g. "Sync
+ * lyrics" on the website, which only works in the app).
  */
-async function available(url: string) {
-  try {
-    const r = await fetch(url, { method: 'HEAD', cache: 'no-store' });
-    // the dev server and the site answer unknown paths with the page itself: that's "missing" too
-    return r.ok && !(r.headers.get('content-type') ?? '').includes('text/html');
-  } catch {
-    return false;
-  }
+type Release = { assets?: { name: string; browser_download_url: string }[] };
+
+async function releaseUrl(file: string): Promise<string | null> {
+  const { owner, repo } = GITHUB_RELEASES;
+  const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } });
+  if (r.status === 404) return null; // no release yet (or the repository is private)
+  if (!r.ok) throw new Error(r.status === 403 ? 'GitHub is rate-limiting downloads right now — try again in a few minutes.' : `GitHub answered ${r.status}.`);
+  const rel = (await r.json()) as Release;
+  return rel.assets?.find((a) => a.name === file)?.browser_download_url ?? null;
 }
 
-async function download(url: string) {
-  if (!(await available(url))) {
-    notify('The Mac app isn’t available to download yet — check back soon.', 'error');
-    return;
+async function download(build: AppBuild) {
+  const label = build === 'windows' ? 'Windows' : 'Mac';
+  try {
+    const url = await releaseUrl(APP_FILES[build]);
+    if (!url) {
+      notify(`The ${label} app isn’t available to download yet — check back soon.`, 'error');
+      return;
+    }
+    window.location.href = url; // GitHub serves it as a file download; the page stays put
+  } catch (e) {
+    notify(`Couldn’t start the download: ${(e as Error).message}`, 'error');
   }
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = url.split('/').pop() || 'Vayro.dmg';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
 }
 
 export function MacDownload({ onPointerMove }: { onPointerMove?: (e: React.PointerEvent<HTMLElement>) => void }) {
   const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<AppBuild | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -46,12 +53,34 @@ export function MacDownload({ onPointerMove }: { onPointerMove?: (e: React.Point
       window.removeEventListener('keydown', key);
     };
   }, [open]);
+  useEffect(() => {
+    const show = () => setOpen(true);
+    window.addEventListener('vayro:need-app', show);
+    return () => window.removeEventListener('vayro:need-app', show);
+  }, []);
   if (IN_DESKTOP_APP) return null;
 
-  const pick = (url: string) => {
+  const pick = async (build: AppBuild) => {
+    setBusy(build);
+    await download(build);
+    setBusy(null);
     setOpen(false);
-    void download(url);
   };
+  const Item = ({ build, icon, title, hint }: { build: AppBuild; icon: React.ReactNode; title: string; hint: string }) => (
+    <button
+      type="button"
+      role="menuitem"
+      disabled={!!busy}
+      onClick={() => void pick(build)}
+      className="flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-white/[0.07] disabled:opacity-60"
+    >
+      <span className="mt-0.5 shrink-0 text-ink-2">{icon}</span>
+      <span>
+        <span className="block text-[13.5px] font-medium text-ink">{busy === build ? 'Checking…' : title}</span>
+        <span className="block text-[12px] text-ink-3">{hint}</span>
+      </span>
+    </button>
+  );
   return (
     <div ref={wrap} className="relative">
       <button
@@ -60,7 +89,7 @@ export function MacDownload({ onPointerMove }: { onPointerMove?: (e: React.Point
         onPointerMove={onPointerMove}
         aria-expanded={open}
         aria-haspopup="menu"
-        title="The Vayro app for Mac: syncs lyrics with the Spotify app, nothing else to install"
+        title="The Vayro app: syncs lyrics with the Spotify app, nothing else to install"
         className="press rim-follow relative inline-flex h-10 items-center gap-2 rounded-full px-5 text-[13.5px] font-medium text-ink-2 ring-1 ring-white/15 backdrop-blur-md transition-colors hover:text-ink"
         style={{ background: 'rgb(255 255 255 / 0.04)' }}
       >
@@ -70,28 +99,21 @@ export function MacDownload({ onPointerMove }: { onPointerMove?: (e: React.Point
         {open && (
           <motion.div
             role="menu"
-            aria-label="Choose your Mac"
-            initial={{ opacity: 0, x: '-50%', y: 6, scale: 0.97 }}
+            aria-label="Choose your computer"
+            initial={{ opacity: 0, x: '-50%', y: -6, scale: 0.97 }}
             animate={{ opacity: 1, x: '-50%', y: 0, scale: 1 }}
-            exit={{ opacity: 0, x: '-50%', y: 4, scale: 0.98 }}
+            exit={{ opacity: 0, x: '-50%', y: -4, scale: 0.98 }}
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="glass-strong absolute left-1/2 top-[calc(100%+10px)] z-20 w-[290px] rounded-2xl p-1.5 text-left"
+            // opens upward: below it sits the player bar, which would cover it
+            className="glass-strong absolute bottom-[calc(100%+10px)] left-1/2 z-50 w-[290px] origin-bottom rounded-2xl p-1.5 text-left"
+            // nearly solid: it opens over the headline and buttons, which must not show through
+            style={{ background: 'linear-gradient(180deg, rgb(32 31 40 / 0.96), rgb(16 15 20 / 0.97)) padding-box, linear-gradient(135deg, rgb(255 255 255 / 0.45), rgb(255 255 255 / 0.08) 45%, rgb(255 255 255 / 0.25)) border-box', backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)' }}
           >
             <p className="px-3 pb-1 pt-2 text-[11px] text-ink-3">Which Mac? (Apple menu → About This Mac → Chip)</p>
-            <button type="button" role="menuitem" onClick={() => pick(MAC_DOWNLOADS.appleSilicon)} className="flex w-full items-start gap-3 rounded-xl px-3 py-2.5 hover:bg-white/[0.07]">
-              <Cpu size={17} className="mt-0.5 shrink-0 text-ink-2" />
-              <span>
-                <span className="block text-[13.5px] font-medium text-ink">Apple Silicon</span>
-                <span className="block text-[12px] text-ink-3">Chip says M1, M2, M3, M4…</span>
-              </span>
-            </button>
-            <button type="button" role="menuitem" onClick={() => pick(MAC_DOWNLOADS.intel)} className="flex w-full items-start gap-3 rounded-xl px-3 py-2.5 hover:bg-white/[0.07]">
-              <Laptop size={17} className="mt-0.5 shrink-0 text-ink-2" />
-              <span>
-                <span className="block text-[13.5px] font-medium text-ink">Intel</span>
-                <span className="block text-[12px] text-ink-3">Processor says Intel (older Macs)</span>
-              </span>
-            </button>
+            <Item build="appleSilicon" icon={<Cpu size={17} />} title="Apple Silicon" hint="Chip says M1, M2, M3, M4…" />
+            <Item build="intel" icon={<Laptop size={17} />} title="Intel" hint="Processor says Intel (older Macs)" />
+            <div className="mx-3 my-1 h-px bg-white/10" />
+            <Item build="windows" icon={<Monitor size={17} />} title="Windows" hint="Windows 10 / 11, 64-bit" />
           </motion.div>
         )}
       </AnimatePresence>

@@ -4,6 +4,7 @@ import { currentTrack, playTracks, playerStore } from './player';
 import { searchLive } from '../services/libraryCatalog';
 import { updateSettings } from './settings';
 import { notify } from './player';
+import { CAN_FOLLOW_SPOTIFY } from '../config/downloads';
 import type { Track } from '../types/music';
 
 /**
@@ -125,6 +126,12 @@ async function poll() {
 
 export function startNowPlaying() {
   if (timer !== null) return;
+  // a website on the internet can't see the apps on the visitor's computer: point them to the app
+  if (!CAN_FOLLOW_SPOTIFY) {
+    notify('Syncing with the Spotify app needs the Vayro app on your computer — websites can’t see other apps. Download it here:', 'info');
+    window.dispatchEvent(new Event('vayro:need-app'));
+    return;
+  }
   songKey = '';
   // the point of following Spotify is its synced lyrics: show them
   updateSettings({ view: 'lyrics' });

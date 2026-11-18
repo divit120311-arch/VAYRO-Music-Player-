@@ -1,12 +1,27 @@
 /**
- * Where the desktop app downloads live. Put the files the GitHub build produces (see DESKTOP.md)
- * at these paths — e.g. in /public/downloads/ — or change these to full URLs (a GitHub Release,
- * a file host…).
+ * Where the desktop app downloads come from: the latest GitHub Release of this repository.
+ * The "Desktop app" workflow (.github/workflows/desktop.yml) builds the installers and attaches them
+ * to a Release with exactly these file names whenever a version tag (v1.0.1, …) is pushed.
+ *
+ * Visitors can only download Release files from a PUBLIC repository. For a private code repository,
+ * point GITHUB_RELEASES at a separate public repository that only holds the releases (see DESKTOP.md).
  */
-export const MAC_DOWNLOADS = {
-  appleSilicon: '/downloads/Vayro-mac-apple-silicon.dmg',
-  intel: '/downloads/Vayro-mac-intel.dmg',
-};
+export const GITHUB_RELEASES = { owner: 'divit120311-arch', repo: 'VAYRO-Music-Player-' };
+
+export const APP_FILES = {
+  appleSilicon: 'Vayro-mac-apple-silicon.dmg',
+  intel: 'Vayro-mac-intel.dmg',
+  windows: 'Vayro-windows-setup.exe',
+} as const;
+export type AppBuild = keyof typeof APP_FILES;
 
 /** true inside the Vayro desktop app (no point offering the download there) */
 export const IN_DESKTOP_APP = typeof navigator !== 'undefined' && /\bElectron\//.test(navigator.userAgent);
+
+/**
+ * Can "Sync lyrics" follow the Spotify app from here? Only when Vayro's server runs on this same
+ * computer: the desktop app, or the site opened from localhost. A website on the internet can't see
+ * the apps on a visitor's computer — browsers don't allow it.
+ */
+export const CAN_FOLLOW_SPOTIFY =
+  IN_DESKTOP_APP || (typeof location !== 'undefined' && ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname));
