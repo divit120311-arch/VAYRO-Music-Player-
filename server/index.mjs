@@ -18,7 +18,7 @@ import { lookup } from 'node:dns/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { handleTranscribe } from './asr/index.mjs';
 import { handleLibrary } from './catalog/routes.mjs';
 import { handleProviders } from './providers.mjs';
@@ -38,6 +38,8 @@ if (existsSync(envPath)) {
 }
 
 const PORT = Number(process.env.PORT) || 8787;
+/** running as a Vercel serverless function (the website's API), not as Vayro's own server */
+const SERVERLESS = !!process.env.VERCEL;
 const JAMENDO_CLIENT_ID = process.env.JAMENDO_CLIENT_ID?.trim() || '';
 const USER_AGENT = 'Vayro/1.0 (ambient music visualizer)';
 
@@ -618,7 +620,11 @@ async function serveStatic(req, res, pathname) {
 }
 
 // --- router --------------------------------------------------------------------
-const server = http.createServer(async (req, res) => {
+/**
+ * Every /api request (and, when Vayro serves itself, the site's files). Exported so the website's
+ * Vercel function (api/handler.mjs) runs exactly the same code as the Mac app and `npm run dev`.
+ */
+export async function handle(req, res) {
   const { pathname, searchParams } = new URL(req.url, 'http://localhost');
   try {
     if (req.method === 'OPTIONS') {
@@ -626,7 +632,9 @@ const server = http.createServer(async (req, res) => {
       return res.end();
     }
     if (pathname === '/api/health') {
-      return sendJson(res, 200, { ok: true, providers: { openverse: true, jamendo: Boolean(JAMENDO_CLIENT_ID) }, transcribe: true });
+      // serverless: no speech model on the server (far too large) — the website transcribes in the
+      // browser instead (src/services/transcriber.ts reads this flag)
+      return sendJson(res, 200, { ok: true, providers: { openverse: true, jamendo: Boolean(JAMENDO_CLIENT_ID) }, transcribe: !SERVERLESS, serverless: SERVERLESS });
     }
     if (pathname === '/api/catalog/openverse') return await handleOpenverse(res, searchParams);
     if (pathname === '/api/catalog/jamendo') return await handleJamendo(res, searchParams);
@@ -643,7 +651,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (pathname.startsWith("/api/library") && (await handleLibrary(req, res, pathname, searchParams, sendJson))) return;
     if (pathname === "/api/config" && (await handleProviders(req, res, pathname, searchParams, sendJson))) return;
+    // a hosted server must never follow the media of the machine it runs on — that's not the visitor's
+    if (SERVERLESS && pathname.startsWith('/api/nowplaying')) return sendJson(res, 200, { supported: false, error: 'Following the Spotify app needs Vayro running on your own computer (the Mac app).' });
     if (pathname.startsWith('/api/nowplaying') && (await handleNowPlaying(req, res, pathname, searchParams, sendJson))) return;
+    if (SERVERLESS && pathname.startsWith('/api/transcribe')) return sendJson(res, 501, { error: 'On the website, speech recognition runs in your browser.' });
     if (await handleTranscribe(req, res, pathname, searchParams, sendJson)) return;
     if (pathname.startsWith('/api/')) return sendJson(res, 404, { error: 'Unknown endpoint.' });
     return await serveStatic(req, res, pathname);
@@ -654,9 +665,12 @@ const server = http.createServer(async (req, res) => {
     const message = err.status ? err.message : aborted ? 'The source took too long to respond.' : `Could not reach the source (${err.cause?.code || err.message}).`;
     sendJson(res, status, { error: message });
   }
-});
+}
 
+// Vayro's own server: `npm run dev` / `npm start` / the Mac app run this file directly.
+// Imported by the Vercel function instead, it doesn't listen on a port.
+const runDirectly = !!process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 // HOST=127.0.0.1 (the desktop app): only this computer can connect, and no firewall prompt
-server.listen(PORT, process.env.HOST || undefined, () => {
+if (runDirectly) http.createServer(handle).listen(PORT, process.env.HOST || undefined, () => {
   console.log(`[afterglow] API listening on http://localhost:${PORT}  (jamendo: ${JAMENDO_CLIENT_ID ? 'configured' : 'not configured'})`);
 });

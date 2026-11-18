@@ -47,9 +47,9 @@ export interface BackendHealth {
   providers: { openverse: boolean; jamendo: boolean };
 }
 
-export async function checkBackend(): Promise<BackendHealth> {
+export async function checkBackend(timeoutMs = 12_000): Promise<BackendHealth> {
   try {
-    return await apiJson<BackendHealth>('/api/health', AbortSignal.timeout(4000));
+    return await apiJson<BackendHealth>('/api/health', AbortSignal.timeout(timeoutMs));
   } catch {
     return { ok: false, providers: { openverse: false, jamendo: false } };
   }

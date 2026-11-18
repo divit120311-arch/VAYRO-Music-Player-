@@ -1,0 +1,33 @@
+# Web app checks on every push and pull request: install as Vercel does (Linux, no CUDA, no
+# Electron download), type-check, unit tests, production build. Catches a broken site before
+# Vercel deploys it. (Vercel's own deployment still comes from its GitHub integration.)
+name: Web app
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install (as on Vercel)
+        run: npm ci
+        env:
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - name: Unit tests
+        run: npm test
+      - name: Type-check and build
+        run: npm run build
+      - name: The website's API loads without the server's speech model or Electron
+        env:
+          VERCEL: '1'
+          AFTERGLOW_DATA: /tmp/vayro
+        run: node --input-type=module -e "const m = await import('./api/handler.mjs'); if (typeof m.default !== 'function') throw new Error('api/handler.mjs has no default export'); console.log('api/handler.mjs ok')"

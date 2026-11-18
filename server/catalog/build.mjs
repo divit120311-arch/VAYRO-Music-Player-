@@ -16,7 +16,7 @@
 //   node server/catalog/build.mjs            build / resume (keeps artists already built)
 //   node server/catalog/build.mjs --fresh    rebuild everything
 //   node server/catalog/build.mjs drake sza  rebuild just these
-import { readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -323,6 +323,7 @@ export async function readCatalog(file = CATALOG_FILE) {
 }
 
 export async function writeCatalog(cat, file = CATALOG_FILE) {
+  await mkdir(path.dirname(file), { recursive: true }); // a fresh data folder (Mac app, Vercel /tmp)
   const tmp = `${file}.tmp`;
   await writeFile(tmp, JSON.stringify(cat));
   await rename(tmp, file);

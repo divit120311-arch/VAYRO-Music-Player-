@@ -53,6 +53,29 @@ function writeCache(id: string, v: PreviewAlignment | 'none') {
 }
 export const cachedAlignment = (id: string) => readCache(id);
 
+/**
+ * Where each library preview starts in its song, worked out once with Vayro's native speech engine
+ * and shipped with the site (public/preview-offsets.json). It never changes for a given preview, so
+ * website visitors get synced lyrics at once instead of waiting for their browser to listen.
+ */
+type ShippedOffsets = Record<string, { o: number; m: number; g?: 1 } | 0>;
+let shipped: Promise<ShippedOffsets> | null = null;
+function shippedOffsets(): Promise<ShippedOffsets> {
+  shipped ??= fetch('/preview-offsets.json', { cache: 'force-cache' })
+    .then((r) => (r.ok && (r.headers.get('content-type') ?? '').includes('json') ? (r.json() as Promise<ShippedOffsets>) : {}))
+    .catch((e: unknown) => {
+      console.warn('[vayro] preview-offsets.json unavailable — previews will be lined up by listening', e);
+      return {};
+    });
+  return shipped;
+}
+async function shippedAlignment(id: string): Promise<PreviewAlignment | 'none' | null> {
+  const e = (await shippedOffsets())[id];
+  if (e === undefined) return null; // not in the table: listen as usual
+  if (e === 0) return 'none'; // the native engine couldn't place it: the browser's won't either
+  return { offset: e.o, matched: e.m, heard: e.m, ...(e.g ? { guess: true } : {}) };
+}
+
 interface W { key: string; t: number }
 
 /** longest common subsequence of heard words vs lyric words; returns the matched pairs */
@@ -192,7 +215,16 @@ export const wordsOfLrc = (lrc: string): W[] => parseLrc(lrc).flatMap((l) => wor
 export async function alignPreview(track: Track, doc: LyricsDoc, signal: { cancelled: boolean }): Promise<PreviewAlignment | null> {
   const cached = readCache(track.id);
   if (cached) return cached === 'none' ? null : cached;
-  if (!track.streamUrl || !(await serverAvailable())) return null; // the browser engine is too slow for this
+  const known = await shippedAlignment(track.id);
+  if (known) {
+    writeCache(track.id, known);
+    return known === 'none' ? null : known;
+  }
+  if (!track.streamUrl) return null;
+  // Vayro's own server (dev, Mac app) listens with its native engine. The website has no server-side
+  // speech model (a serverless function can't hold it), so the visitor's browser listens instead —
+  // slower, so it skips the heavy last pass.
+  const onServer = await serverAvailable();
   const lyric = doc.lines.flatMap((l) => wordTimings(l).words).map((w) => ({ key: norm(w.text), t: w.t }));
   const language = languageHint(doc.lines.map((l) => l.text));
   // a short first pass is quick; if it can't decide (an instrumental intro, a repeated chorus), a
@@ -202,11 +234,11 @@ export async function alignPreview(track: Track, doc: LyricsDoc, signal: { cance
   // with the Sync buttons beat untimed text
   let guess: ReturnType<typeof scoreAlignment> = null;
   // last resort: the larger model over the whole clip hears fast or mumbled vocals far better
-  const passes = [
+  const passes: { seconds: number; model: 'base' | 'small' }[] = [
     { seconds: LISTEN, model: 'base' },
     { seconds: CLIP, model: 'base' },
-    { seconds: CLIP, model: 'small' },
-  ] as const;
+    ...(onServer ? [{ seconds: CLIP, model: 'small' as const }] : []),
+  ];
   for (const { seconds, model } of passes) {
     const heard = await hear(track, model, seconds, signal, language);
     if (!heard) return null;
@@ -291,7 +323,7 @@ export async function timePreviewPlain(track: Track, texts: string[], signal: { 
     const c = localStorage.getItem(PLAIN_CACHE + track.id);
     if (c) return c === 'none' ? null : (JSON.parse(c) as LyricLine[]);
   } catch { /* recompute */ }
-  if (!track.streamUrl || !(await serverAvailable())) return null;
+  if (!track.streamUrl) return null; // the server's engine when there is one, else the browser's
   const language = languageHint(texts);
   let lines: LyricLine[] | null = null;
   for (const model of ['base', 'small'] as const) {

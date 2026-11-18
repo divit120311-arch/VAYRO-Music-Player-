@@ -16,13 +16,12 @@ import { nudgeOffset, setUserLyrics, stepLine } from './state/lyrics';
 import { useSettings } from './hooks/useAudioPlayer';
 import { useFullscreen } from './hooks/useFullscreen';
 import { usePlayer, enqueue, next, prev, notify, seekBy, setVolume, toggleMute, togglePlay } from './hooks/useAudioPlayer';
-import { audioEngine } from './engine/audioEngine';
 import { MODES } from './config/lighting';
 import { cycleView, setMode } from './state/settings';
 import { useStore } from './store';
 import { closePanels, openLibrary, openMusic, toggleMusic, toggleSettings, uiStore } from './state/ui';
 import { playerStore } from './state/player';
-import { checkBackend } from './services/musicProvider';
+import { ensureBackend } from './state/backend';
 import { filesToTracks, isAudioFile } from './services/localFiles';
 
 function Toast() {
@@ -154,12 +153,14 @@ export default function App() {
 
   // ---- backend availability (catalog + proxy)
   useEffect(() => {
-    checkBackend().then((h) => {
-      audioEngine.backendAvailable = h.ok;
-      playerStore.setState({ backend: { checked: true, ok: h.ok, jamendo: h.providers.jamendo } });
+    // the API can be slow to answer the very first request (a serverless cold start): one retry
+    let retry = 0;
+    void ensureBackend().then((ok) => {
+      if (!ok) retry = window.setTimeout(() => void ensureBackend(), 5000);
     });
     // a Spotify sign-in to finish/restore
     void initSpotify();
+    return () => clearTimeout(retry);
   }, []);
 
   // ---- local files

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Cpu, Download, Laptop, Monitor } from 'lucide-react';
-import { APP_FILES, GITHUB_RELEASES, IN_DESKTOP_APP, type AppBuild } from '../config/downloads';
+import { Cpu, Download, Laptop } from 'lucide-react';
+import { APP_FILES, GITHUB_RELEASES, IN_DESKTOP_APP, IS_MAC, type AppBuild } from '../config/downloads';
 import { notify } from '../state/player';
 
 /**
@@ -25,11 +25,11 @@ async function releaseUrl(file: string): Promise<string | null> {
 }
 
 async function download(build: AppBuild) {
-  const label = build === 'windows' ? 'Windows' : 'Mac';
   try {
     const url = await releaseUrl(APP_FILES[build]);
     if (!url) {
-      notify(`The ${label} app isn’t available to download yet — check back soon.`, 'error');
+      // no published release with this file (GitHub returns 404 for a private repository too)
+      notify('The Mac app hasn’t been published yet, so there’s nothing to download. Vayro works right here in the browser meanwhile.', 'error');
       return;
     }
     window.location.href = url; // GitHub serves it as a file download; the page stays put
@@ -58,7 +58,8 @@ export function MacDownload({ onPointerMove }: { onPointerMove?: (e: React.Point
     window.addEventListener('vayro:need-app', show);
     return () => window.removeEventListener('vayro:need-app', show);
   }, []);
-  if (IN_DESKTOP_APP) return null;
+  // the app is for Macs; everyone else uses Vayro in the browser (and the app itself needs no download)
+  if (IN_DESKTOP_APP || !IS_MAC) return null;
 
   const pick = async (build: AppBuild) => {
     setBusy(build);
@@ -112,8 +113,6 @@ export function MacDownload({ onPointerMove }: { onPointerMove?: (e: React.Point
             <p className="px-3 pb-1 pt-2 text-[11px] text-ink-3">Which Mac? (Apple menu → About This Mac → Chip)</p>
             <Item build="appleSilicon" icon={<Cpu size={17} />} title="Apple Silicon" hint="Chip says M1, M2, M3, M4…" />
             <Item build="intel" icon={<Laptop size={17} />} title="Intel" hint="Processor says Intel (older Macs)" />
-            <div className="mx-3 my-1 h-px bg-white/10" />
-            <Item build="windows" icon={<Monitor size={17} />} title="Windows" hint="Windows 10 / 11, 64-bit" />
           </motion.div>
         )}
       </AnimatePresence>

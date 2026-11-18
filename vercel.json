@@ -3,5 +3,13 @@
   "framework": "vite",
   "installCommand": "ONNXRUNTIME_NODE_INSTALL_CUDA=skip ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci",
   "buildCommand": "npm run build",
-  "outputDirectory": "dist"
+  "outputDirectory": "dist",
+  "rewrites": [{ "source": "/api/:path*", "destination": "/api/handler?__path=:path*" }],
+  "functions": {
+    "api/handler.mjs": {
+      "maxDuration": 30,
+      "includeFiles": "server/**",
+      "excludeFiles": "{node_modules/@huggingface/**,node_modules/onnxruntime-node/**,node_modules/onnxruntime-web/**,node_modules/onnxruntime-common/**,node_modules/sharp/**,node_modules/@img/**,node_modules/electron/**,node_modules/electron-builder/**,node_modules/app-builder-bin/**}"
+    }
+  }
 }

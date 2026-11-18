@@ -1,12 +1,13 @@
 import { createStore } from '../store';
 import { playerStore, currentTrack, seek, setPlaybackGate } from './player';
 import { settingsStore } from './settings';
+import { ensureBackend } from './backend';
 import { audioEngine } from '../engine/audioEngine';
 import { lightingEngine } from '../engine/lightingEngine';
 import { alignPreview, cachedAlignment, shiftDoc, timePlainLines, timePreviewPlain, wordsOfLrc } from '../services/previewAlign';
 import { cleanTitle, docFromUserText, lookupLyrics, lyricsTextById, reliableArtist } from '../services/lyricsProvider';
 import { demoLyricsLrc } from '../services/demoLyrics';
-import { prefetchTranscription, transcribe, type TranscribeDiag, type TranscribeJob, type TranscribePhase } from '../services/transcriber';
+import { prefetchTranscription, serverAvailable, transcribe, type TranscribeDiag, type TranscribeJob, type TranscribePhase } from '../services/transcriber';
 import { formatLrcTime, parseLrc } from '../utils/lrc';
 import type { LyricsDoc, LyricsStatus, UserLyricsSource } from '../types/lyrics';
 import type { Track } from '../types/music';
@@ -106,7 +107,7 @@ async function loadFor(track: Track | null, force = false, noTranscribe = false)
   // 4. online lookup (exact synced lyrics beat a machine transcription)
   // untagged files are searchable by title: the server matches on duration to pick the right version
   const reliable = !!cleanTitle(track.title) && (reliableArtist(track.artist) || track.provider === 'local');
-  if (settings.onlineLyrics && playerStore.getState().backend.ok && reliable) {
+  if (settings.onlineLyrics && reliable && (await ensureBackend())) {
     const ac = new AbortController();
     abort = ac;
     try {
@@ -140,7 +141,7 @@ async function loadFor(track: Track | null, force = false, noTranscribe = false)
   // 6. unsynced text, clearly labelled
   if (fallback) return set({ status: 'ready', doc: fallback });
   if (!settings.onlineLyrics && !canTranscribe(track)) return set({ status: 'disabled' });
-  if (!playerStore.getState().backend.ok && !canTranscribe(track)) {
+  if (!(await ensureBackend()) && !canTranscribe(track)) {
     return set({ status: 'unavailable', error: 'The Vayro server isn’t running, so online lyrics can’t be looked up.' });
   }
   if (!reliable && !canTranscribe(track)) return set({ status: 'unavailable', error: 'This track has no reliable artist/title to search with.' });
@@ -211,6 +212,9 @@ async function timePlainPreview(track: Track, doc: LyricsDoc, texts: string[], m
 // A library preview doesn't start until its lyrics are timed (usually 10–50 s the first time,
 // instant afterwards). Never longer than WAIT_MAX, and "Play now" skips the wait.
 const WAIT_MAX = 120_000;
+// on the website the visitor's browser does the listening (much slower than Vayro's own server):
+// start the song after a short wait and let the lyrics switch to synced as soon as they're lined up
+const WAIT_MAX_BROWSER = 8_000;
 let skipWait: (() => void) | null = null;
 
 /** start the held song now, without waiting for the lyrics */
@@ -239,7 +243,12 @@ setPlaybackGate((track) => {
       finish();
     };
     const unsub = lyricsStore.subscribe(check);
-    const timer = setTimeout(finish, WAIT_MAX);
+    let timer = setTimeout(finish, WAIT_MAX);
+    void serverAvailable().then((server) => {
+      if (done || server) return;
+      clearTimeout(timer);
+      timer = setTimeout(finish, WAIT_MAX_BROWSER);
+    });
     skipWait = finish;
     set({ waiting: true });
     check();
@@ -338,7 +347,7 @@ async function prefetchNext() {
   prefetched.add(next.id);
   if (read(LS_DOC + lyricsKey(next)) || (next.embeddedLyrics && /^\s*\[\d/m.test(next.embeddedLyrics.text))) return;
   try {
-    if (s.onlineLyrics && playerStore.getState().backend.ok && cleanTitle(next.title)) {
+    if (s.onlineLyrics && cleanTitle(next.title) && (await ensureBackend())) {
       const r = await lookupLyrics(next, next.duration ?? 0, s.lyricsScript);
       if (r.kind === 'doc' && r.doc.kind === 'synced') return;
     }

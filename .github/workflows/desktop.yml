@@ -1,16 +1,19 @@
-# Builds the Vayro desktop app for Mac and Windows on GitHub's machines.
+# Builds the Vayro app for macOS on GitHub's Mac machines. (Windows has no desktop app: Windows
+# users use Vayro in the browser — the website on Vercel, which this workflow doesn't touch.)
 #
-#   Actions → "Desktop app" → Run workflow   builds the installers (download them from "Artifacts")
-#   push a version tag, e.g.  v1.0.1        builds them AND publishes a GitHub Release with them;
-#                                            the site's "Download for Mac" button reads that Release
+#   Actions → "macOS app" → Run workflow   builds the .dmg files (download them from "Artifacts")
+#   push a version tag, e.g.  v1.0.2      builds them AND publishes a GitHub Release with them;
+#                                          the site's "Download for Mac" button reads that Release
 #
-# The installers get fixed names (the site looks for exactly these):
-#   Vayro-mac-apple-silicon.dmg · Vayro-mac-intel.dmg · Vayro-windows-setup.exe
+# Pushes to main don't run this (only tags and manual runs).
+#
+# The files get fixed names (the site looks for exactly these):
+#   Vayro-mac-apple-silicon.dmg (M1/M2/M3/M4…) · Vayro-mac-intel.dmg (Intel Macs)
 #
 # Private code repository? Visitors can't download from its Releases. Publish to a separate PUBLIC
 # repository instead: set the repository variable RELEASES_REPO (e.g. "you/vayro-releases") and the
 # secret RELEASES_TOKEN (a token allowed to write to that repository's contents). See DESKTOP.md.
-name: Desktop app
+name: macOS app
 
 on:
   workflow_dispatch:
@@ -24,19 +27,12 @@ jobs:
       matrix:
         include:
           - name: mac-apple-silicon
-            os: macos-latest
             args: --mac --arm64 -c.mac.artifactName=Vayro-mac-apple-silicon.dmg
           - name: mac-intel
-            os: macos-latest
             args: --mac --x64 -c.mac.artifactName=Vayro-mac-intel.dmg
             # Intel Macs: install the x64 builds of the native speech-model libraries
             cpu: x64
-          - name: windows
-            os: windows-latest
-            # the installer name (Vayro-windows-setup.exe) is set in package.json → build.nsis.artifactName:
-            # this job runs in PowerShell, which splits "-c.nsis…" arguments
-            args: --win --x64
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -49,19 +45,18 @@ jobs:
         run: npm run build
       - name: Package
         env:
-          # no Apple / Windows signing certificate yet: build unsigned (ad-hoc on Mac)
+          # no Apple signing certificate yet: ad-hoc signed (see DESKTOP.md for Developer ID + notarization)
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npx electron-builder ${{ matrix.args }} --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: vayro-${{ matrix.name }}
-          path: |
-            release/Vayro-mac-*.dmg
-            release/Vayro-windows-setup.exe
+          path: release/Vayro-mac-*.dmg
           if-no-files-found: error
 
   release:
-    # only for version tags (v1.0.1, …): attach the installers to a GitHub Release
+    # only for version tags (v1.0.2, …): attach the .dmg files to a GitHub Release
+    # (still publishes whichever Mac build succeeded if the other one failed)
     if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
     needs: build
     runs-on: ubuntu-latest
@@ -76,12 +71,11 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Vayro ${{ github.ref_name }}
+          name: Vayro ${{ github.ref_name }} for Mac
           make_latest: 'true'
           files: |
             installers/Vayro-mac-apple-silicon.dmg
             installers/Vayro-mac-intel.dmg
-            installers/Vayro-windows-setup.exe
           fail_on_unmatched_files: false
           repository: ${{ vars.RELEASES_REPO || github.repository }}
           token: ${{ secrets.RELEASES_TOKEN || github.token }}

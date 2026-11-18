@@ -4,7 +4,8 @@ import { currentTrack, playTracks, playerStore } from './player';
 import { searchLive } from '../services/libraryCatalog';
 import { updateSettings } from './settings';
 import { notify } from './player';
-import { CAN_FOLLOW_SPOTIFY } from '../config/downloads';
+import { CAN_FOLLOW_SPOTIFY, IS_MAC } from '../config/downloads';
+import { closePanels, openMusic } from './ui';
 import type { Track } from '../types/music';
 
 /**
@@ -126,10 +127,24 @@ async function poll() {
 
 export function startNowPlaying() {
   if (timer !== null) return;
-  // a website on the internet can't see the apps on the visitor's computer: point them to the app
+  // On the website (Windows, Mac, any browser): a web page can't see the visitor's other apps, so it
+  // can't follow the Spotify app. What it CAN do is real time-synced lyrics for what plays in Vayro:
+  // show them for the current song, or open the Library to pick one. Following the Spotify app is
+  // the Mac app's job (it runs Vayro's server on the Mac itself).
   if (!CAN_FOLLOW_SPOTIFY) {
-    notify('Syncing with the Spotify app needs the Vayro app on your computer — websites can’t see other apps. Download it here:', 'info');
-    window.dispatchEvent(new Event('vayro:need-app'));
+    if (currentTrack()) {
+      updateSettings({ view: 'lyrics' });
+      closePanels();
+      notify('Lyrics in sync with the song playing in Vayro.', 'info');
+    } else {
+      openMusic('home');
+      notify(
+        IS_MAC
+          ? 'Pick any song — its lyrics play in sync with it. To follow your Spotify app instead, get the Vayro app for Mac.'
+          : 'Pick any song — its lyrics play in sync with it.',
+        'info',
+      );
+    }
     return;
   }
   songKey = '';
