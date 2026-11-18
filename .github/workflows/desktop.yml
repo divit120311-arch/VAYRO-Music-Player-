@@ -1,0 +1,50 @@
+# Builds the Vayro desktop app for Mac and Windows on GitHub's machines.
+# Run it from the repo's Actions tab ("Desktop app" → Run workflow), or push a tag like v1.0.1.
+# The finished installers appear under the run's "Artifacts".
+name: Desktop app
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: mac-apple-silicon
+            os: macos-latest
+            args: --mac --arm64
+          - name: mac-intel
+            os: macos-latest
+            args: --mac --x64
+            # Intel Macs: install the x64 builds of the native speech-model libraries
+            cpu: x64
+          - name: windows
+            os: windows-latest
+            args: --win --x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci ${{ matrix.cpu && format('--cpu={0}', matrix.cpu) || '' }} --foreground-scripts
+      - name: Build the site
+        run: npm run build
+      - name: Package
+        env:
+          # no Apple / Windows signing certificate yet: build unsigned
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder ${{ matrix.args }} --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vayro-${{ matrix.name }}
+          path: |
+            release/*.dmg
+            release/*.exe
+          if-no-files-found: error

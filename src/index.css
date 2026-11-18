@@ -1,0 +1,670 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter-tight';
+@import '@fontsource-variable/inter-tight/wght-italic.css';
+@import '@fontsource-variable/jetbrains-mono';
+@import '@fontsource-variable/nunito';
+@import '@fontsource-variable/noto-sans-devanagari';
+@import '@fontsource-variable/noto-sans-gurmukhi';
+@import '@fontsource/anton';
+@import '@fontsource/instrument-serif';
+@import '@fontsource/instrument-serif/400-italic.css';
+
+@theme {
+  --font-sans: 'Inter Tight Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --color-ink: #f3efea;
+  --color-ink-2: rgb(243 239 234 / 0.62);
+  --color-ink-3: rgb(243 239 234 / 0.38);
+  --color-ink-4: rgb(243 239 234 / 0.16);
+  --color-line: rgb(255 255 255 / 0.07);
+  --color-line-2: rgb(255 255 255 / 0.12);
+  --color-panel: rgb(12 12 15 / 0.78);
+  --color-panel-solid: #0c0c0f;
+  --color-well: rgb(255 255 255 / 0.04);
+  --color-danger: #ff6b6b;
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out-soft: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+:root {
+  /* one timing scale for the whole product (mirrored in src/components/motion.tsx) */
+  --dur-fast: 160ms;
+  --dur-base: 280ms;
+  --dur-slow: 560ms;
+  /* where floating panels start: below the header (taller on phones: the tabs get their own row) */
+  --panel-top: 76px;
+}
+@media (max-width: 639.98px) {
+  :root { --panel-top: 118px; }
+}
+
+:root {
+  /* live lighting colours, written by the engine ~10×/s */
+  --glow-p: #ff8a1f;
+  --glow-s: #ff4b12;
+  --room: #020203;
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--room);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-feature-settings: 'ss01', 'cv11';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  transition: background-color 0.6s ease;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--glow-p) 45%, transparent);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* =============================================================================================
+   Glass, used by hierarchy rather than everywhere:
+     .glass-strong  the always-visible chrome: header groups and the player bar
+     .glass         floating panels, popovers and dialogs
+     .glass-subtle  wells inside a panel (no blur of its own: it already sits on glass)
+   Each pane: a dark translucent fill, a specular sheen along the top edge, a thin bright rim and
+   layered soft shadows. The sheen is painted with gradients and inset shadows, not extra layers.
+   ============================================================================================= */
+.glass,
+.glass-strong {
+  /* body tint (padding box) and the rim light (border box), both as backgrounds: no extra layers */
+  --glass-fill: rgb(18 18 23 / 0.5);
+  --glass-fill-2: rgb(9 9 12 / 0.58);
+  --rim: linear-gradient(
+    135deg,
+    rgb(255 255 255 / 0.6) 0%,
+    rgb(255 255 255 / 0.14) 20%,
+    rgb(255 255 255 / 0.04) 50%,
+    rgb(255 255 255 / 0.12) 78%,
+    rgb(255 255 255 / 0.4) 100%
+  );
+  border: 1px solid transparent;
+  background:
+    /* specular sheen pooled along the top edge */
+    linear-gradient(180deg, rgb(255 255 255 / 0.1), rgb(255 255 255 / 0.02) 34%, rgb(255 255 255 / 0) 60%) padding-box,
+    /* light collecting in the lower edge, the way thick glass does */
+    linear-gradient(0deg, rgb(255 255 255 / 0.05), rgb(255 255 255 / 0) 30%) padding-box,
+    linear-gradient(180deg, var(--glass-fill), var(--glass-fill-2)) padding-box,
+    var(--rim) border-box;
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  box-shadow:
+    /* inner highlights: top lip and a softer bottom lip */
+    inset 0 1px 0.5px rgb(255 255 255 / 0.28),
+    inset 0 -1px 0.5px rgb(255 255 255 / 0.08),
+    /* a faint inner glow so the pane reads as a solid object, not a flat tint */
+    inset 0 0 22px rgb(255 255 255 / 0.035),
+    /* depth */
+    0 1px 1px rgb(0 0 0 / 0.3),
+    0 12px 28px -12px rgb(0 0 0 / 0.55),
+    0 40px 80px -36px rgb(0 0 0 / 0.7);
+}
+/* the always-visible chrome (header pills, player bar) is the clearest glass */
+.glass-strong {
+  --glass-fill: rgb(22 22 28 / 0.06);
+  --glass-fill-2: rgb(12 12 16 / 0.12);
+  backdrop-filter: blur(14px) saturate(200%) brightness(1.12);
+  -webkit-backdrop-filter: blur(14px) saturate(200%) brightness(1.12);
+}
+/* liquid glass (Chromium only, see LiquidGlass.tsx): the backdrop is bent, not just frosted */
+:root[data-liquid] .glass-strong {
+  backdrop-filter: url(#liquid-glass) blur(4px) saturate(210%) brightness(1.15);
+}
+:root[data-liquid] .glass {
+  --glass-fill: rgb(18 18 23 / 0.34);
+  --glass-fill-2: rgb(9 9 12 / 0.42);
+  backdrop-filter: url(#liquid-glass) blur(7px) saturate(210%) brightness(1.1);
+}
+.glass-subtle {
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.045), rgb(255 255 255 / 0.02));
+  border: 1px solid rgb(255 255 255 / 0.06);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.05);
+}
+/* phones: lighter blur, no refraction (cheaper to draw), a little more opaque to stay readable */
+@media (max-width: 640px) {
+  .glass,
+  .glass-strong,
+  :root[data-liquid] .glass,
+  :root[data-liquid] .glass-strong {
+    --glass-fill: rgb(18 18 23 / 0.86);
+    --glass-fill-2: rgb(10 10 13 / 0.92);
+    backdrop-filter: blur(14px) saturate(150%);
+    -webkit-backdrop-filter: blur(14px) saturate(150%);
+  }
+}
+/* Performance quality (low-end PCs, src/engine/quality.ts): the same glass, cheaper to draw —
+   a smaller blur, no refraction (data-liquid is off), one soft shadow instead of three, a little
+   more opaque so text stays readable over the lighting */
+:root[data-quality='performance'] .glass,
+:root[data-quality='performance'] .glass-strong {
+  --glass-fill: rgb(18 18 23 / 0.72);
+  --glass-fill-2: rgb(10 10 13 / 0.8);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  box-shadow:
+    inset 0 1px 0.5px rgb(255 255 255 / 0.28),
+    0 14px 30px -14px rgb(0 0 0 / 0.65);
+}
+:root[data-quality='performance'] .nav-pill-dark,
+:root[data-quality='performance'] .round-glass {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+/* slow decorative loops: hold still (the lighting, lyrics and hover effects keep moving) */
+:root[data-quality='performance'] :is(.orb-a, .orb-b, .orb-c, .hero-float-a > g, .hero-float-b > g, .hero-comet, .hero-gradient-text, .logo-wave > span) {
+  animation-play-state: paused;
+}
+/* no backdrop-filter support: solid, readable panes (the rim light stays) */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass,
+  .glass-strong {
+    --glass-fill: rgb(20 20 25 / 0.97);
+    --glass-fill-2: rgb(11 11 14 / 0.98);
+  }
+}
+
+/* ---- liquid glass lenses on options -----------------------------------------------------------
+   .liquid-pill   the selected option (nav tabs, segmented choices, the selected mode…)
+   .liquid-hover  any option: becomes a lens while hovered
+   A clear pill with a bright rim, top/bottom lips and an inner glow; in Chromium the content behind
+   it is bent by the tighter #liquid-lens filter. */
+.liquid-pill,
+.liquid-hover:hover,
+.liquid-lens-el {
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.12), rgb(255 255 255 / 0.015) 45%, rgb(255 255 255 / 0.06)) padding-box,
+    linear-gradient(135deg, rgb(255 255 255 / 0.75), rgb(255 255 255 / 0.12) 30%, rgb(255 255 255 / 0.05) 55%, rgb(255 255 255 / 0.45)) border-box;
+  border-color: transparent;
+  box-shadow:
+    inset 0 1px 0.5px rgb(255 255 255 / 0.55),
+    inset 0 -1px 0.5px rgb(255 255 255 / 0.18),
+    inset 0 0 12px rgb(255 255 255 / 0.07),
+    0 4px 14px -4px rgb(0 0 0 / 0.45),
+    0 0 22px -6px color-mix(in srgb, var(--glow-p) 70%, transparent);
+  backdrop-filter: blur(3px) saturate(220%) brightness(1.25);
+  -webkit-backdrop-filter: blur(3px) saturate(220%) brightness(1.25);
+}
+.liquid-hover {
+  border: 1px solid transparent;
+  transition:
+    background-color var(--dur-base) var(--ease-out-soft),
+    box-shadow var(--dur-base) var(--ease-out-soft),
+    transform var(--dur-fast) var(--ease-spring);
+}
+.liquid-pill,
+.liquid-lens-el {
+  border: 1px solid transparent;
+}
+/* the gliding lens sits on top of the options: a clear drop of glass with a bright rim, so the
+   label underneath reads through it (and, in Chromium, is magnified by it) */
+.liquid-lens-el {
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgb(255 255 255 / 0.1), transparent 55%) padding-box,
+    linear-gradient(0deg, rgb(255 255 255 / 0.05), transparent 40%) padding-box,
+    linear-gradient(135deg, rgb(255 255 255 / 0.85), rgb(255 255 255 / 0.15) 28%, rgb(255 255 255 / 0.04) 55%, rgb(255 255 255 / 0.55)) border-box;
+  box-shadow:
+    inset 0 1px 1px rgb(255 255 255 / 0.6),
+    inset 0 -1px 1px rgb(255 255 255 / 0.22),
+    inset 0 0 10px rgb(255 255 255 / 0.06),
+    0 6px 18px -6px rgb(0 0 0 / 0.5),
+    0 0 24px -6px color-mix(in srgb, var(--glow-p) 70%, transparent);
+  backdrop-filter: saturate(160%) brightness(1.12);
+  -webkit-backdrop-filter: saturate(160%) brightness(1.12);
+  will-change: transform;
+}
+/* inside a lens group the single gliding lens is the hover look; options don't light up on their own */
+.lens-group .liquid-hover:hover {
+  background: none;
+  border-color: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+/* options sit above the gliding lens */
+.lens-group > .liquid-hover,
+.lens-group .liquid-hover {
+  position: relative;
+  z-index: 1;
+}
+:root[data-liquid] .liquid-pill,
+:root[data-liquid] .liquid-hover:hover {
+  backdrop-filter: url(#liquid-lens) blur(1px) saturate(240%) brightness(1.35);
+}
+/* Chromium: the lens magnifies what's under it, bending it hardest at the rim (no blur: crisp) */
+:root[data-liquid] .liquid-lens-el {
+  backdrop-filter: url(#liquid-magnify) saturate(170%) brightness(1.15);
+}
+@media (max-width: 640px) {
+  :root[data-liquid] .liquid-pill,
+  :root[data-liquid] .liquid-hover:hover,
+  :root[data-liquid] .liquid-lens-el {
+    backdrop-filter: blur(3px) saturate(200%) brightness(1.2);
+  }
+}
+
+/* ---- press feedback and the two button weights ------------------------------------------------ */
+.press {
+  transition: transform var(--dur-fast) var(--ease-spring);
+}
+.press:active {
+  transform: scale(0.95);
+  transition-duration: 90ms;
+}
+.btn-primary,
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border-radius: 999px;
+  font-weight: 600;
+  transition:
+    transform var(--dur-fast) var(--ease-spring),
+    box-shadow var(--dur-base) var(--ease-out-soft),
+    background-color var(--dur-base) var(--ease-out-soft);
+}
+.btn-primary {
+  color: #0a0a0c;
+  background: linear-gradient(180deg, #fffaf3, #e6dfd4);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.9), 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 22px -10px color-mix(in srgb, var(--glow-p) 55%, transparent);
+}
+.btn-secondary {
+  color: var(--color-ink);
+  background: rgb(255 255 255 / 0.06);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.1), inset 0 1px 0 rgb(255 255 255 / 0.06);
+}
+@media (hover: hover) {
+  .btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.9), 0 2px 4px rgb(0 0 0 / 0.4), 0 12px 28px -10px color-mix(in srgb, var(--glow-p) 70%, transparent);
+  }
+  .btn-secondary:hover {
+    background: rgb(255 255 255 / 0.1);
+  }
+}
+.btn-primary:active,
+.btn-secondary:active {
+  transform: scale(0.96);
+  transition-duration: 90ms;
+}
+
+/* ---- cards: a small lift on hover, the artwork inside eases in a touch ------------------------ */
+.lift {
+  transition: transform var(--dur-base) var(--ease-out-soft), background-color var(--dur-base) var(--ease-out-soft);
+}
+.zoom-img img {
+  transition: transform 700ms var(--ease-out-soft);
+}
+@media (hover: hover) {
+  .lift:hover {
+    transform: translateY(-3px);
+  }
+  .lift:hover .zoom-img img {
+    transform: scale(1.04);
+  }
+}
+
+/* ---- room atmosphere: two faint light pools that drift over minutes, plus fine grain ---------- */
+@keyframes drift-a {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(4vw, -3vh, 0) scale(1.08); }
+}
+@keyframes drift-b {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1.04); }
+  50% { transform: translate3d(-5vw, 4vh, 0) scale(0.95); }
+}
+.orb {
+  position: absolute;
+  border-radius: 999px;
+}
+.orb-a { animation: drift-a 70s var(--ease-in-out-soft) infinite; }
+.orb-b { animation: drift-b 90s var(--ease-in-out-soft) infinite; }
+.orb-c { animation: drift-a 110s var(--ease-in-out-soft) infinite reverse; }
+.grain {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.5 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+  opacity: 0.03;
+  mix-blend-mode: overlay;
+}
+
+.hairline {
+  border-color: var(--color-line);
+}
+
+/* thin, quiet scrollbars */
+.scroll-quiet {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.12) transparent;
+}
+.scroll-quiet::-webkit-scrollbar {
+  width: 8px;
+}
+.scroll-quiet::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.1);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+/* focus ring that glows in the current light colour */
+.focus-glow:focus-visible,
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+[role='slider']:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--room), 0 0 0 3.5px color-mix(in srgb, var(--glow-p) 80%, white);
+}
+
+/* native color input as a round swatch */
+input[type='color'] {
+  -webkit-appearance: none;
+  appearance: none;
+  border: none;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+}
+input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+input[type='color']::-webkit-color-swatch {
+  border: none;
+  border-radius: 999px;
+}
+input[type='color']::-moz-color-swatch {
+  border: none;
+  border-radius: 999px;
+}
+
+.text-glow {
+  text-shadow: 0 0 24px color-mix(in srgb, var(--glow-p) 35%, transparent);
+}
+
+/* immersive: the lyrics toolbar hides with the controls */
+.cursor-none-idle[data-idle='true'] .lyrics-toolbar {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.cursor-none-idle[data-idle='true'],
+.cursor-none-idle[data-idle='true'] * {
+  cursor: none !important;
+}
+
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(90deg, rgb(255 255 255 / 0.03) 25%, rgb(255 255 255 / 0.07) 50%, rgb(255 255 255 / 0.03) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:not([data-motion="full"]) .skeleton, html:not([data-motion="full"]) .orb-a, html:not([data-motion="full"]) .orb-b, html:not([data-motion="full"]) .orb-c {
+    animation: none;
+  }
+  html:not([data-motion="full"]) .lift:hover, html:not([data-motion="full"]) .btn-primary:hover, html:not([data-motion="full"]) .lift:hover .zoom-img img {
+    transform: none;
+  }
+}
+
+/* late-night mode: warmer, dimmer interface (the lighting engine dims the strips itself) */
+:root[data-late-night] {
+  --color-ink: #f0dcc6;
+  --color-ink-2: rgb(240 220 198 / 0.55);
+  --color-ink-3: rgb(240 220 198 / 0.32);
+}
+:root[data-late-night] .late-dim {
+  opacity: 0.82;
+}
+
+/* =============================================================================================
+   Hero world (HeroBackdrop.tsx): parallax layers, drifting ribbons, the comet on the dome's rim,
+   and the shimmer in the headline. All transform/opacity/background-position: cheap to animate.
+   ============================================================================================= */
+.hero-world {
+  --mx: 0;
+  --my: 0;
+}
+.hero-layer {
+  transform: translate(calc(var(--mx) * var(--depth) * -1px), calc(var(--my) * var(--depth) * -0.6px));
+  transition: transform 1.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes hero-float-a {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  50% { transform: translate(18px, 14px) rotate(2.2deg); }
+}
+@keyframes hero-float-b {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  50% { transform: translate(-22px, -16px) rotate(-2.6deg); }
+}
+/* the float sits on an inner wrapper so it adds to the parallax instead of replacing it */
+.hero-float-a > g { animation: hero-float-a 14s var(--ease-in-out-soft, ease-in-out) infinite; transform-origin: 300px 150px; }
+.hero-float-b > g { animation: hero-float-b 17s var(--ease-in-out-soft, ease-in-out) infinite; transform-origin: 1450px 700px; }
+@keyframes hero-comet {
+  from { stroke-dashoffset: 108; }
+  to { stroke-dashoffset: -8; }
+}
+.hero-comet {
+  stroke-dasharray: 6 110;
+  animation: hero-comet 7s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+/* "Differently." — a slow sheen travelling through the gradient */
+@keyframes hero-sheen {
+  from { background-position: 0% 50%; }
+  to { background-position: 200% 50%; }
+}
+.hero-gradient-text {
+  /* the mockup's soft lavender-grey, with a slow sheen passing through */
+  background-image: linear-gradient(100deg, #a99ed9 0%, #d9d3f2 22%, #f1eeff 34%, #b3a8e3 52%, #d9d3f2 76%, #a99ed9 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: hero-sheen 9s linear infinite;
+  filter: drop-shadow(0 0 24px rgb(170 150 255 / 0.25));
+}
+/* hero buttons from the mockup: a lit lavender pill and a dark glass pill */
+.hero-btn-primary {
+  color: #141020;
+  background: linear-gradient(180deg, #f4f0ff, #cfc5f7);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.95), inset 0 -2px 6px rgb(120 100 220 / 0.25), 0 0 0 1px rgb(255 255 255 / 0.35), 0 10px 40px -8px rgb(170 150 255 / 0.7);
+}
+.hero-btn-primary:hover {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.95), inset 0 -2px 6px rgb(120 100 220 / 0.25), 0 0 0 1px rgb(255 255 255 / 0.45), 0 14px 54px -8px rgb(170 150 255 / 0.95);
+}
+.hero-btn-secondary {
+  color: var(--color-ink);
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.09), rgb(255 255 255 / 0.03));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18), 0 0 0 1px rgb(255 255 255 / 0.16), 0 10px 30px -12px rgb(0 0 0 / 0.8);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+}
+.hero-btn-secondary:hover {
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.14), rgb(255 255 255 / 0.05));
+}
+@media (prefers-reduced-motion: reduce) {
+  html:not([data-motion="full"]) .hero-float-a > g, html:not([data-motion="full"]) .hero-float-b > g, html:not([data-motion="full"]) .hero-comet, html:not([data-motion="full"]) .hero-gradient-text {
+    animation: none;
+  }
+  html:not([data-motion="full"]) .hero-comet {
+    opacity: 0;
+  }
+}
+
+/* logo: the waveform mark breathes gently (each bar a little after the last) */
+@keyframes logo-wave {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(0.55); }
+}
+.logo-wave > span {
+  animation: logo-wave 1.8s var(--ease-in-out-soft, ease-in-out) infinite;
+  transform-origin: center;
+}
+@media (prefers-reduced-motion: reduce) {
+  html:not([data-motion="full"]) .logo-wave > span { animation: none; }
+}
+
+/* ---- mockup header: the dark glass pill behind the active nav item, and round glass buttons ----
+   (a plain colour is only valid as the LAST background layer, so the tints are one-colour gradients) */
+.nav-pill-dark {
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.12), rgb(255 255 255 / 0.03) 55%) padding-box,
+    linear-gradient(rgb(22 20 32 / 0.6), rgb(22 20 32 / 0.6)) padding-box,
+    linear-gradient(135deg, rgb(255 255 255 / 0.55), rgb(255 255 255 / 0.1) 40%, rgb(255 255 255 / 0.3)) border-box;
+  border: 1px solid transparent;
+  box-shadow: inset 0 1px 0.5px rgb(255 255 255 / 0.35), 0 6px 20px -8px rgb(0 0 0 / 0.8), 0 0 22px -8px rgb(170 150 255 / 0.55);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+}
+.round-glass {
+  background:
+    radial-gradient(120% 100% at 50% 0%, rgb(255 255 255 / 0.14), rgb(255 255 255 / 0.02) 60%) padding-box,
+    linear-gradient(rgb(14 12 22 / 0.55), rgb(14 12 22 / 0.55)) padding-box,
+    linear-gradient(135deg, rgb(255 255 255 / 0.55), rgb(255 255 255 / 0.08) 45%, rgb(255 255 255 / 0.3)) border-box;
+  border: 1px solid transparent;
+  box-shadow: inset 0 1px 0.5px rgb(255 255 255 / 0.35), 0 8px 24px -10px rgb(0 0 0 / 0.9);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  transition: box-shadow var(--dur-base) var(--ease-out-soft), transform var(--dur-fast) var(--ease-spring);
+}
+.round-glass:hover,
+.round-glass-on {
+  box-shadow: inset 0 1px 0.5px rgb(255 255 255 / 0.45), 0 8px 24px -10px rgb(0 0 0 / 0.9), 0 0 22px -6px rgb(170 150 255 / 0.6);
+}
+
+/* =============================================================================================
+   Hover light. Light that responds to the pointer, not things that jump around:
+     .btn-sweep   a band of light sweeps across the button on hover
+     .rim-follow  the button's rim lights up nearest the pointer (--px/--py set on pointermove)
+     .glare       a soft glare follows the pointer across a glass panel (the player bar)
+   ============================================================================================= */
+.btn-sweep::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 30%, rgb(255 255 255 / 0.85) 48%, rgb(255 255 255 / 0.25) 54%, transparent 70%);
+  transform: translateX(-120%);
+  mix-blend-mode: soft-light;
+}
+.btn-sweep:hover::after {
+  transform: translateX(120%);
+  transition: transform 900ms var(--ease-out-soft);
+}
+.rim-follow::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1.5px;
+  pointer-events: none;
+  background: radial-gradient(90px circle at var(--px, 50%) var(--py, 50%), rgb(230 220 255 / 0.95), rgb(170 150 255 / 0.4) 40%, transparent 70%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  opacity: 0;
+  transition: opacity var(--dur-base) var(--ease-out-soft);
+}
+.rim-follow:hover::before {
+  opacity: 1;
+}
+.rim-follow:hover {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18), 0 0 0 1px rgb(255 255 255 / 0.16), 0 10px 30px -12px rgb(0 0 0 / 0.8), 0 0 30px -8px rgb(170 150 255 / 0.5);
+}
+.glare {
+  position: relative;
+}
+.glare::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(280px circle at var(--px, 50%) var(--py, 50%), rgb(255 255 255 / 0.09), transparent 65%);
+  opacity: 0;
+  transition: opacity 400ms var(--ease-out-soft);
+}
+@media (hover: hover) {
+  .glare:hover::after {
+    opacity: 1;
+  }
+}
+
+/* the player bar's bass halo (opacity is driven per frame by real audio analysis only) */
+.audio-halo {
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--glow-p) 45%, rgb(255 255 255 / 0.4)),
+    0 0 34px -4px color-mix(in srgb, var(--glow-p) 70%, transparent),
+    0 0 90px -10px color-mix(in srgb, var(--glow-s) 55%, transparent);
+  transition: opacity 90ms linear;
+  will-change: opacity;
+}
+
+/* album art: lifts and catches light on hover (pointer devices only) */
+.art-hover {
+  transition: transform 450ms var(--ease-out-soft), filter 450ms var(--ease-out-soft);
+}
+@media (hover: hover) {
+  .art-hover:hover {
+    transform: translateY(-2px) scale(1.04);
+    filter: drop-shadow(0 14px 24px rgb(0 0 0 / 0.55)) brightness(1.06);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html:not([data-motion="full"]) .audio-halo { display: none; }
+  html:not([data-motion="full"]) .art-hover, html:not([data-motion="full"]) .art-hover:hover { transition: none; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html:not([data-motion="full"]) .btn-sweep:hover::after { transition: none; transform: translateX(-120%); }
+}
+
+/* ---- Mac desktop app: the window's traffic lights live in the header's top-left corner -------- */
+:root[data-shell='mac'] header.app-drag {
+  -webkit-app-region: drag; /* drag the window by the header, like a native title bar */
+  padding-left: 92px;
+}
+:root[data-shell='mac'] header.app-drag :is(button, a, input, select, nav, [role='navigation'], [role='menu']) {
+  -webkit-app-region: no-drag;
+}
+/* full screen hides the traffic lights: the header gets its space back */
+:root[data-shell='mac'][data-fullscreen] header.app-drag {
+  padding-left: 28px;
+}

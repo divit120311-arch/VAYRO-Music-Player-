@@ -1,0 +1,7 @@
+node_modules/
+dist/
+release/
+server/.cache/
+server/.env
+*.mp4
+backup/
