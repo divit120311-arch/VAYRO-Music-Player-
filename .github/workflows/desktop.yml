@@ -33,7 +33,9 @@ jobs:
             cpu: x64
           - name: windows
             os: windows-latest
-            args: --win --x64 -c.nsis.artifactName=Vayro-windows-setup.exe
+            # the installer name (Vayro-windows-setup.exe) is set in package.json → build.nsis.artifactName:
+            # this job runs in PowerShell, which splits "-c.nsis…" arguments
+            args: --win --x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
