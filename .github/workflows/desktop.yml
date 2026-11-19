@@ -1,13 +1,15 @@
-# Builds the Vayro app for macOS on GitHub's Mac machines. (Windows has no desktop app: Windows
-# users use Vayro in the browser — the website on Vercel, which this workflow doesn't touch.)
+# Builds the Vayro app for macOS on GitHub's Mac machines. There is no Windows desktop app:
+# Windows users use Vayro in the browser (the website on Vercel, which this workflow doesn't touch).
 #
-#   Actions → "macOS app" → Run workflow   builds the .dmg files (download them from "Artifacts")
+#   Actions → "macOS app" → Run workflow   builds both .dmg files (download them from "Artifacts")
 #   push a version tag, e.g.  v1.0.2      builds them AND publishes a GitHub Release with them;
 #                                          the site's "Download for Mac" button reads that Release
 #
 # Pushes to main don't run this (only tags and manual runs).
 #
-# The files get fixed names (the site looks for exactly these):
+# electron-builder names the file from package.json → build.mac.artifactName
+# ("Vayro-mac-${arch}.${ext}" → Vayro-mac-arm64.dmg / Vayro-mac-x64.dmg). The "Name the installer"
+# step renames it to the fixed names the site looks for (src/config/downloads.ts):
 #   Vayro-mac-apple-silicon.dmg (M1/M2/M3/M4…) · Vayro-mac-intel.dmg (Intel Macs)
 #
 # Private code repository? Visitors can't download from its Releases. Publish to a separate PUBLIC
@@ -22,53 +24,76 @@ on:
 
 jobs:
   build:
+    name: Build (${{ matrix.name }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: mac-apple-silicon
-            args: --mac --arm64 -c.mac.artifactName=Vayro-mac-apple-silicon.dmg
+            arch: arm64
           - name: mac-intel
-            args: --mac --x64 -c.mac.artifactName=Vayro-mac-intel.dmg
-            # Intel Macs: install the x64 builds of the native speech-model libraries
-            cpu: x64
+            arch: x64
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
       - name: Install
-        run: npm ci ${{ matrix.cpu && format('--cpu={0}', matrix.cpu) || '' }} --foreground-scripts
+        # --cpu picks the native libraries (speech model) for the target chip; macos-latest is
+        # Apple Silicon, so the Intel build is cross-built with the x64 ones
+        run: npm ci --cpu=${{ matrix.arch }} --foreground-scripts
       - name: Build the site
         run: npm run build
       - name: Package
         env:
           # no Apple signing certificate yet: ad-hoc signed (see DESKTOP.md for Developer ID + notarization)
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npx electron-builder ${{ matrix.args }} --publish never
-      - uses: actions/upload-artifact@v4
+        run: npm run dist:mac:${{ matrix.arch }}
+      - name: Name the installer
+        run: |
+          built="release/Vayro-mac-${{ matrix.arch }}.dmg"
+          if [ ! -f "$built" ]; then
+            echo "::error::electron-builder did not produce $built"
+            ls -la release || true
+            exit 1
+          fi
+          mkdir -p out
+          mv "$built" "out/Vayro-${{ matrix.name }}.dmg"
+          ls -la out
+      - uses: actions/upload-artifact@v7
         with:
           name: vayro-${{ matrix.name }}
-          path: release/Vayro-mac-*.dmg
+          path: out/Vayro-${{ matrix.name }}.dmg
           if-no-files-found: error
 
   release:
-    # only for version tags (v1.0.2, …): attach the .dmg files to a GitHub Release
-    # (still publishes whichever Mac build succeeded if the other one failed)
-    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
+    # version tags only (v1.0.2, …). Runs only if BOTH Mac builds succeeded, so a Release never goes
+    # out with one installer missing.
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
+          pattern: vayro-mac-*
           path: installers
           merge-multiple: true
-      - run: ls -la installers
-      - uses: softprops/action-gh-release@v2
+      - name: Check both Mac installers are present
+        run: |
+          ls -la installers || true
+          missing=0
+          for f in Vayro-mac-apple-silicon.dmg Vayro-mac-intel.dmg; do
+            if [ ! -s "installers/$f" ]; then
+              echo "::error::Missing $f — the Mac build for it did not upload an installer. Nothing was released."
+              missing=1
+            fi
+          done
+          exit $missing
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: Vayro ${{ github.ref_name }} for Mac
@@ -76,6 +101,6 @@ jobs:
           files: |
             installers/Vayro-mac-apple-silicon.dmg
             installers/Vayro-mac-intel.dmg
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           repository: ${{ vars.RELEASES_REPO || github.repository }}
           token: ${{ secrets.RELEASES_TOKEN || github.token }}

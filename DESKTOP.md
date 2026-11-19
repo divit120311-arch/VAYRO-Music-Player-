@@ -41,7 +41,11 @@ GitHub builds it on its Mac machines (`.github/workflows/desktop.yml`, named "ma
   **Push origin**. The workflow builds both `.dmg` files and attaches them to a GitHub Release:
   `Vayro-mac-apple-silicon.dmg` (M1/M2/M3/M4…) and `Vayro-mac-intel.dmg`.
 - Pushing to `main` doesn't build the app. Only tags and manual runs do.
-- **Locally on a Mac:** `npm install`, then `npm run dist:mac`. The output goes to `release/`.
+- **Locally on a Mac:** `npm install`, `npm run build`, then `npm run dist:mac:arm64` (Apple Silicon)
+  or `npm run dist:mac:x64` (Intel). The output goes to `release/` as `Vayro-mac-arm64.dmg` /
+  `Vayro-mac-x64.dmg`.
+- A Release is published only when **both** Mac builds succeed; if an installer is missing, the
+  release job stops with an error naming it.
 
 **Visitors can only download Release files from a public repository.** Either make this repository
 public, or publish to a separate public one:

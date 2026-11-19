@@ -13,7 +13,9 @@
     "typecheck": "tsc -b",
     "app:dev": "npm run build && electron .",
     "dist:mac": "npm run build && electron-builder --mac --publish never",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dist:mac:arm64": "electron-builder --mac dmg --arm64 --publish never",
+    "dist:mac:x64": "electron-builder --mac dmg --x64 --publish never"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1"
@@ -69,6 +71,7 @@
     ],
     "mac": {
       "category": "public.app-category.music",
+      "artifactName": "Vayro-mac-${arch}.${ext}",
       "target": [
         {
           "target": "dmg"
