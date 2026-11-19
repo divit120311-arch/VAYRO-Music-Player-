@@ -20,7 +20,7 @@ import { MODES } from './config/lighting';
 import { cycleView, setMode } from './state/settings';
 import { useStore } from './store';
 import { closePanels, openLibrary, openMusic, toggleMusic, toggleSettings, uiStore } from './state/ui';
-import { playerStore } from './state/player';
+import { dismissNotice, playerStore } from './state/player';
 import { ensureBackend } from './state/backend';
 import { filesToTracks, isAudioFile } from './services/localFiles';
 
@@ -37,10 +37,27 @@ function Toast() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6 }}
             transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-            className="glass flex max-w-[560px] items-start gap-2 rounded-2xl px-4 py-2.5 text-[12.5px] leading-snug text-ink-2"
+            className="glass flex max-w-[560px] flex-wrap items-start gap-2 rounded-2xl px-4 py-2.5 text-[12.5px] leading-snug text-ink-2"
           >
             {notice.tone === 'error' && <AlertTriangle size={14} className="mt-[2px] shrink-0 text-red-300" />}
-            {notice.text}
+            <span className="min-w-0 flex-1">{notice.text}</span>
+            {!!notice.actions?.length && (
+              <span className="pointer-events-auto flex w-full flex-wrap justify-end gap-2 pt-1">
+                {notice.actions.map((a) => (
+                  <button
+                    key={a.label}
+                    type="button"
+                    onClick={() => {
+                      dismissNotice();
+                      a.run();
+                    }}
+                    className="press rounded-full bg-white/90 px-3.5 py-1.5 text-[12px] font-semibold text-black hover:bg-white"
+                  >
+                    {a.label}
+                  </button>
+                ))}
+              </span>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

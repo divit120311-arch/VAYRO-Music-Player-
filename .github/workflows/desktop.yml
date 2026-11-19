@@ -1,21 +1,21 @@
-# Builds the Vayro app for macOS on GitHub's Mac machines. There is no Windows desktop app:
-# Windows users use Vayro in the browser (the website on Vercel, which this workflow doesn't touch).
+# Builds the Vayro desktop app on GitHub's machines: Mac (Apple Silicon + Intel) and Windows.
+# The app is Vayro plus its server on the listener's own computer, which is what lets "Sync lyrics"
+# follow the Spotify app (a website can't see other apps). The website itself is on Vercel and this
+# workflow doesn't touch it.
 #
-#   Actions → "macOS app" → Run workflow   builds both .dmg files (download them from "Artifacts")
-#   push a version tag, e.g.  v1.0.2      builds them AND publishes a GitHub Release with them;
-#                                          the site's "Download for Mac" button reads that Release
+#   Actions → "Desktop app" → Run workflow   builds the installers (download them from "Artifacts")
+#   push a version tag, e.g.  v1.0.3        builds them AND publishes a GitHub Release with them;
+#                                            the site's Download button reads that Release
 #
 # Pushes to main don't run this (only tags and manual runs).
 #
-# electron-builder names the file from package.json → build.mac.artifactName
-# ("Vayro-mac-${arch}.${ext}" → Vayro-mac-arm64.dmg / Vayro-mac-x64.dmg). The "Name the installer"
-# step renames it to the fixed names the site looks for (src/config/downloads.ts):
-#   Vayro-mac-apple-silicon.dmg (M1/M2/M3/M4…) · Vayro-mac-intel.dmg (Intel Macs)
+# Fixed file names (the site looks for exactly these, src/config/downloads.ts):
+#   Vayro-mac-apple-silicon.dmg · Vayro-mac-intel.dmg · Vayro-windows-setup.exe
 #
 # Private code repository? Visitors can't download from its Releases. Publish to a separate PUBLIC
 # repository instead: set the repository variable RELEASES_REPO (e.g. "you/vayro-releases") and the
 # secret RELEASES_TOKEN (a token allowed to write to that repository's contents). See DESKTOP.md.
-name: macOS app
+name: Desktop app
 
 on:
   workflow_dispatch:
@@ -30,10 +30,28 @@ jobs:
       matrix:
         include:
           - name: mac-apple-silicon
+            os: macos-latest
             arch: arm64
+            script: dist:mac:arm64
+            built: release/Vayro-mac-arm64.dmg
+            file: Vayro-mac-apple-silicon.dmg
           - name: mac-intel
+            os: macos-latest
             arch: x64
-    runs-on: macos-latest
+            script: dist:mac:x64
+            built: release/Vayro-mac-x64.dmg
+            file: Vayro-mac-intel.dmg
+          - name: windows
+            os: windows-latest
+            arch: x64
+            script: dist:win:x64
+            # named by package.json → build.nsis.artifactName
+            built: release/Vayro-windows-setup.exe
+            file: Vayro-windows-setup.exe
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash # the same commands on the Mac and Windows machines
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -42,35 +60,38 @@ jobs:
           cache: npm
       - name: Install
         # --cpu picks the native libraries (speech model) for the target chip; macos-latest is
-        # Apple Silicon, so the Intel build is cross-built with the x64 ones
+        # Apple Silicon, so the Intel Mac build is cross-built with the x64 ones
         run: npm ci --cpu=${{ matrix.arch }} --foreground-scripts
+        env:
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
       - name: Build the site
         run: npm run build
       - name: Package
         env:
-          # no Apple signing certificate yet: ad-hoc signed (see DESKTOP.md for Developer ID + notarization)
+          # no Apple / Windows signing certificate yet: ad-hoc signed on Mac, unsigned on Windows
+          # (see DESKTOP.md)
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npm run dist:mac:${{ matrix.arch }}
+        run: npm run ${{ matrix.script }}
       - name: Name the installer
         run: |
-          built="release/Vayro-mac-${{ matrix.arch }}.dmg"
+          built="${{ matrix.built }}"
           if [ ! -f "$built" ]; then
             echo "::error::electron-builder did not produce $built"
             ls -la release || true
             exit 1
           fi
           mkdir -p out
-          mv "$built" "out/Vayro-${{ matrix.name }}.dmg"
+          mv "$built" "out/${{ matrix.file }}"
           ls -la out
       - uses: actions/upload-artifact@v7
         with:
           name: vayro-${{ matrix.name }}
-          path: out/Vayro-${{ matrix.name }}.dmg
+          path: out/${{ matrix.file }}
           if-no-files-found: error
 
   release:
-    # version tags only (v1.0.2, …). Runs only if BOTH Mac builds succeeded, so a Release never goes
-    # out with one installer missing.
+    # version tags only (v1.0.2, …). Runs only if ALL builds succeeded, so a Release never goes out
+    # with an installer missing.
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
@@ -79,16 +100,16 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          pattern: vayro-mac-*
+          pattern: vayro-*
           path: installers
           merge-multiple: true
-      - name: Check both Mac installers are present
+      - name: Check all three installers are present
         run: |
           ls -la installers || true
           missing=0
-          for f in Vayro-mac-apple-silicon.dmg Vayro-mac-intel.dmg; do
+          for f in Vayro-mac-apple-silicon.dmg Vayro-mac-intel.dmg Vayro-windows-setup.exe; do
             if [ ! -s "installers/$f" ]; then
-              echo "::error::Missing $f — the Mac build for it did not upload an installer. Nothing was released."
+              echo "::error::Missing $f — its build did not upload an installer. Nothing was released."
               missing=1
             fi
           done
@@ -96,11 +117,12 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
-          name: Vayro ${{ github.ref_name }} for Mac
+          name: Vayro ${{ github.ref_name }}
           make_latest: 'true'
           files: |
             installers/Vayro-mac-apple-silicon.dmg
             installers/Vayro-mac-intel.dmg
+            installers/Vayro-windows-setup.exe
           fail_on_unmatched_files: true
           repository: ${{ vars.RELEASES_REPO || github.repository }}
           token: ${{ secrets.RELEASES_TOKEN || github.token }}

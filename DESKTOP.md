@@ -1,14 +1,15 @@
-# Vayro: website and macOS app
+# Vayro: website and desktop app (Mac + Windows)
 
 | | How people use Vayro | Sync lyrics |
 |---|---|---|
-| **Windows, Linux, any browser** | The website (deployed on Vercel). No download. | Time-synced lyrics for every song played in Vayro. |
-| **Mac** | The website, or the **Vayro app for Mac** | The app also follows the **Spotify app** on that Mac and shows its lyrics in time. |
+| **Any browser** (Windows, Mac, Linux, phones) | The website (deployed on Vercel). No download. | Time-synced lyrics for every song played in Vayro. |
+| **Windows / Mac** | The **Vayro app** (Download button on the site) | Also follows the **Spotify app** (or Spotify in a browser tab) on that computer and shows its lyrics in time. |
 | **Your own computer, `npm run dev`** | `http://localhost:5173` | Also follows the Spotify app on that computer (Windows or Mac). |
 
 A web page can't see a visitor's other apps; browsers don't allow it. So following the Spotify
-app needs Vayro running on that same computer. On a hosted website, **Sync lyrics** shows synced
-lyrics for the song playing in Vayro, or opens the Library to pick one.
+app needs Vayro running on that same computer. On the hosted website, **Sync lyrics** on a Mac or
+Windows PC explains this and offers the app's download (and shows synced lyrics for whatever plays
+in Vayro); on phones and Linux it shows synced lyrics for songs played in Vayro.
 
 ## The website on Vercel
 
@@ -25,26 +26,27 @@ library, lyrics (LRCLIB), artists, audio proxy and settings. The site works from
   they aren't permanent. The built-in library of 60 artists always is.
 - `.github/workflows/web.yml` runs the tests and the production build on every push to `main`.
 
-## The macOS app
+## The desktop app (Mac + Windows)
 
 The app is the website plus its server in one Mac app (Electron). Because it runs on the
 listener's own Mac, **Sync lyrics** can follow their Spotify app. There's nothing else to install.
 
 ### Building it (no Mac needed)
 
-GitHub builds it on its Mac machines (`.github/workflows/desktop.yml`, named "macOS app"):
+GitHub builds it on its Mac and Windows machines (`.github/workflows/desktop.yml`, named "Desktop app"):
 
-- **Test build:** open **Actions → macOS app → Run workflow**. After about 15 minutes, download
-  `vayro-mac-apple-silicon` and `vayro-mac-intel` from the run's **Artifacts**.
+- **Test build:** open **Actions → Desktop app → Run workflow**. After about 15 minutes, download
+  `vayro-mac-apple-silicon`, `vayro-mac-intel` and `vayro-windows` from the run's **Artifacts**.
 - **Release** (powers the site's **Download for Mac** button): push a version tag. In GitHub
   Desktop, go to **History**, right-click the newest commit → **Create Tag…** → `v1.0.2` →
-  **Push origin**. The workflow builds both `.dmg` files and attaches them to a GitHub Release:
-  `Vayro-mac-apple-silicon.dmg` (M1/M2/M3/M4…) and `Vayro-mac-intel.dmg`.
+  **Push origin**. The workflow builds all three installers and attaches them to a GitHub Release:
+  `Vayro-mac-apple-silicon.dmg` (M1/M2/M3/M4…), `Vayro-mac-intel.dmg` and `Vayro-windows-setup.exe`.
 - Pushing to `main` doesn't build the app. Only tags and manual runs do.
 - **Locally on a Mac:** `npm install`, `npm run build`, then `npm run dist:mac:arm64` (Apple Silicon)
   or `npm run dist:mac:x64` (Intel). The output goes to `release/` as `Vayro-mac-arm64.dmg` /
   `Vayro-mac-x64.dmg`.
-- A Release is published only when **both** Mac builds succeed; if an installer is missing, the
+- **Locally on Windows:** `npm run dist:win` → `release/Vayro-windows-setup.exe`.
+- A Release is published only when **all three** builds succeed; if an installer is missing, the
   release job stops with an error naming it.
 
 **Visitors can only download Release files from a public repository.** Either make this repository
@@ -57,7 +59,15 @@ public, or publish to a separate public one:
    - add the secret `RELEASES_TOKEN` = the token.
 4. In `src/config/downloads.ts`, set `GITHUB_RELEASES` to that repository.
 
-The **Download for Mac** button appears only on Macs. If no Release is published yet, it says so.
+The Download button reads **Download for Mac** on Macs and **Download for Windows** on Windows PCs
+(hidden elsewhere and inside the app). If no Release is published yet, it says so.
+
+### What Windows users see the first time
+
+They run `Vayro-windows-setup.exe`. Because it isn't code-signed yet, Windows SmartScreen says it
+protected the PC: they click **More info → Run anyway** (once). PCs with **Smart App Control**
+turned on block unsigned apps outright; signing the installer (a code-signing certificate, or
+Azure Trusted Signing) removes both.
 
 ### What Mac users see the first time
 

@@ -20,7 +20,7 @@ export interface PlayerState {
   /** colours sampled from the current artwork, when readable */
   palette: [string, string] | null;
   backend: { checked: boolean; ok: boolean; jamendo: boolean };
-  notice: { id: number; text: string; tone: 'info' | 'error' } | null;
+  notice: { id: number; text: string; tone: 'info' | 'error'; actions?: NoticeAction[] } | null;
 }
 
 const VOL_KEY = 'afterglow:volume:v1';
@@ -55,12 +55,19 @@ const set = playerStore.setState;
 export const currentTrack = (s: PlayerState = get()) => (s.index >= 0 ? s.queue[s.index] ?? null : null);
 
 let noticeId = 0;
-export function notify(text: string, tone: 'info' | 'error' = 'info') {
+/** a button on a notice (e.g. "Download for Windows"); clicking it runs `run` and closes the notice */
+export type NoticeAction = { label: string; run: () => void };
+
+export function notify(text: string, tone: 'info' | 'error' = 'info', actions?: NoticeAction[]) {
   const id = ++noticeId;
-  set({ notice: { id, text, tone } });
+  set({ notice: { id, text, tone, actions } });
   window.setTimeout(() => {
     if (get().notice?.id === id) set({ notice: null });
-  }, tone === 'error' ? 7000 : 3800);
+  }, actions?.length ? 12000 : tone === 'error' ? 7000 : 3800);
+}
+
+export function dismissNotice() {
+  set({ notice: null });
 }
 
 // ---- engine wiring -------------------------------------------------------------

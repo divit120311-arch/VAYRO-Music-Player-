@@ -8,18 +8,27 @@
  */
 export const GITHUB_RELEASES = { owner: 'divit120311-arch', repo: 'VAYRO-Music-Player-' };
 
-/** Vayro's desktop app is for Mac only; on Windows (and everywhere else) Vayro runs in the browser */
+/** the desktop app (Mac and Windows): needed to follow the Spotify app; everything else works in the browser */
 export const APP_FILES = {
   appleSilicon: 'Vayro-mac-apple-silicon.dmg',
   intel: 'Vayro-mac-intel.dmg',
+  windows: 'Vayro-windows-setup.exe',
 } as const;
 export type AppBuild = keyof typeof APP_FILES;
 
-/** a Mac (not an iPhone / iPad): the only computers the desktop app is for */
+/** a Mac (not an iPhone / iPad) */
 export const IS_MAC =
   typeof navigator !== 'undefined' &&
   ((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform === 'macOS' ||
     (/Macintosh|Mac OS X/.test(navigator.userAgent) && !/iPhone|iPad|iPod/.test(navigator.userAgent) && navigator.maxTouchPoints < 2));
+
+/** a Windows PC */
+export const IS_WINDOWS =
+  typeof navigator !== 'undefined' &&
+  ((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform === 'Windows' || /Windows NT/.test(navigator.userAgent));
+
+/** the desktop app is offered here (a Mac or a Windows PC, not already in the app) */
+export const APP_PLATFORM: 'Mac' | 'Windows' | null = IS_MAC ? 'Mac' : IS_WINDOWS ? 'Windows' : null;
 
 /** true inside the Vayro desktop app (no point offering the download there) */
 export const IN_DESKTOP_APP = typeof navigator !== 'undefined' && /\bElectron\//.test(navigator.userAgent);

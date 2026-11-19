@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Cpu, Download, Laptop } from 'lucide-react';
-import { APP_FILES, GITHUB_RELEASES, IN_DESKTOP_APP, IS_MAC, type AppBuild } from '../config/downloads';
+import { Cpu, Download, Laptop, Monitor } from 'lucide-react';
+import { APP_FILES, APP_PLATFORM, GITHUB_RELEASES, IN_DESKTOP_APP, type AppBuild } from '../config/downloads';
 import { notify } from '../state/player';
 
 /**
- * "Download for Mac": the Mac builds (a website can't reliably tell an Apple Silicon Mac from an
- * Intel one) and the Windows installer. The files come from the repository's latest GitHub Release:
+ * "Download for Mac" / "Download for Windows" (whichever computer the visitor is on): the two Mac
+ * builds (a website can't reliably tell an Apple Silicon Mac from an Intel one) or the Windows
+ * installer. The files come from the repository's latest GitHub Release:
  * GitHub's API answers websites directly (CORS), so before downloading we can check the file is
  * really published and say so plainly if it isn't. Hidden inside the desktop app.
  *
@@ -24,12 +25,13 @@ async function releaseUrl(file: string): Promise<string | null> {
   return rel.assets?.find((a) => a.name === file)?.browser_download_url ?? null;
 }
 
-async function download(build: AppBuild) {
+export async function downloadApp(build: AppBuild) {
   try {
     const url = await releaseUrl(APP_FILES[build]);
     if (!url) {
       // no published release with this file (GitHub returns 404 for a private repository too)
-      notify('The Mac app hasn’t been published yet, so there’s nothing to download. Vayro works right here in the browser meanwhile.', 'error');
+      const label = build === 'windows' ? 'Windows' : 'Mac';
+      notify(`The ${label} app hasn’t been published yet, so there’s nothing to download. Vayro works right here in the browser meanwhile.`, 'error');
       return;
     }
     window.location.href = url; // GitHub serves it as a file download; the page stays put
@@ -58,12 +60,12 @@ export function MacDownload({ onPointerMove }: { onPointerMove?: (e: React.Point
     window.addEventListener('vayro:need-app', show);
     return () => window.removeEventListener('vayro:need-app', show);
   }, []);
-  // the app is for Macs; everyone else uses Vayro in the browser (and the app itself needs no download)
-  if (IN_DESKTOP_APP || !IS_MAC) return null;
+  // offered on Macs and Windows PCs; phones etc. use Vayro in the browser (and the app needs no download)
+  if (IN_DESKTOP_APP || !APP_PLATFORM) return null;
 
   const pick = async (build: AppBuild) => {
     setBusy(build);
-    await download(build);
+    await downloadApp(build);
     setBusy(null);
     setOpen(false);
   };
@@ -94,7 +96,7 @@ export function MacDownload({ onPointerMove }: { onPointerMove?: (e: React.Point
         className="press rim-follow relative inline-flex h-10 items-center gap-2 rounded-full px-5 text-[13.5px] font-medium text-ink-2 ring-1 ring-white/15 backdrop-blur-md transition-colors hover:text-ink"
         style={{ background: 'rgb(255 255 255 / 0.04)' }}
       >
-        <Download size={15} strokeWidth={1.9} /> Download for Mac
+        <Download size={15} strokeWidth={1.9} /> Download for {APP_PLATFORM}
       </button>
       <AnimatePresence>
         {open && (
@@ -110,9 +112,19 @@ export function MacDownload({ onPointerMove }: { onPointerMove?: (e: React.Point
             // nearly solid: it opens over the headline and buttons, which must not show through
             style={{ background: 'linear-gradient(180deg, rgb(32 31 40 / 0.96), rgb(16 15 20 / 0.97)) padding-box, linear-gradient(135deg, rgb(255 255 255 / 0.45), rgb(255 255 255 / 0.08) 45%, rgb(255 255 255 / 0.25)) border-box', backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)' }}
           >
-            <p className="px-3 pb-1 pt-2 text-[11px] text-ink-3">Which Mac? (Apple menu → About This Mac → Chip)</p>
-            <Item build="appleSilicon" icon={<Cpu size={17} />} title="Apple Silicon" hint="Chip says M1, M2, M3, M4…" />
-            <Item build="intel" icon={<Laptop size={17} />} title="Intel" hint="Processor says Intel (older Macs)" />
+            {APP_PLATFORM === 'Windows' ? (
+              <>
+                <p className="px-3 pb-1 pt-2 text-[12px] leading-snug text-ink-2">To sync with the Spotify app on this PC, get the Vayro app. Websites can’t see your other apps.</p>
+                <Item build="windows" icon={<Monitor size={17} />} title="Vayro for Windows" hint="Windows 10 / 11, 64-bit" />
+              </>
+            ) : (
+              <>
+                <p className="px-3 pb-1 pt-2 text-[12px] leading-snug text-ink-2">To sync with the Spotify app on this Mac, get the Vayro app. Websites can’t see your other apps.</p>
+                <p className="px-3 pb-1 pt-1 text-[11px] text-ink-3">Which Mac? (Apple menu → About This Mac → Chip)</p>
+                <Item build="appleSilicon" icon={<Cpu size={17} />} title="Apple Silicon" hint="Chip says M1, M2, M3, M4…" />
+                <Item build="intel" icon={<Laptop size={17} />} title="Intel" hint="Processor says Intel (older Macs)" />
+              </>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
