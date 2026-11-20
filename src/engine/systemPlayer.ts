@@ -25,6 +25,10 @@ export interface SystemState {
   /** the helper's clock when it read the session (ms since epoch) */
   now?: number;
   receivedAt?: number;
+  /** ignore position disagreements smaller than this (s); default 0.6 (Windows' coarse reports) */
+  tolerance?: number;
+  /** title/artist were read off the screen (may hold a misread letter): match them to the catalogue */
+  fuzzy?: boolean;
 }
 
 async function command(cmd: string, t?: number) {
@@ -54,7 +58,7 @@ class SystemPlayer implements ExternalPlayer {
       const sinceRead = s.receivedAt ? Math.max(0, (Date.now() - s.receivedAt) / 1000) : 0;
       const pos = s.position + (this.playing ? measuredAgo + sinceRead : 0);
       // ignore small disagreements (the report is coarser than our clock): no jitter
-      if (Math.abs(pos - this.currentTime) > 0.6 || this.playing !== wasPlaying) {
+      if (Math.abs(pos - this.currentTime) > (s.tolerance ?? 0.6) || this.playing !== wasPlaying) {
         this.base = pos;
         this.baseAt = performance.now();
       }
@@ -74,8 +78,11 @@ class SystemPlayer implements ExternalPlayer {
     this.justLoaded = true;
   }
   async play() {
-    if (this.justLoaded) {
+    // a just-detected song, or a shared Spotify tab (Vayro can't press its buttons): nothing to press;
+    // just report what the other app is doing
+    if (this.justLoaded || this.s?.fuzzy) {
       this.justLoaded = false;
+      if (this.playing) this.emit({ type: 'playing' });
       return;
     }
     if (!this.playing) await command('play');

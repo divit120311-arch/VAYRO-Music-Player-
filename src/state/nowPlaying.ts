@@ -5,6 +5,7 @@ import { searchLive } from '../services/libraryCatalog';
 import { updateSettings } from './settings';
 import { notify } from './player';
 import { CAN_FOLLOW_SPOTIFY } from '../config/downloads';
+import { SpotifyTabReader, canShareTab, sameText, type TabStatus } from '../services/spotifyTab';
 import { closePanels, openMusic } from './ui';
 import type { Track } from '../types/music';
 
@@ -15,8 +16,9 @@ import type { Track } from '../types/music';
  * Every ~500 ms the local server reports the song and its position (Windows' media session).
  * When the song changes, it becomes the current track (provider 'system'), so lyrics, lighting and
  * the player bar all follow it. Play/pause/seek/skip in Vayro are passed back to that app.
- * Only works on the computer running Vayro's server: Windows (media session) or macOS (the
- * Spotify / Music apps' scripting interface).
+ * With Vayro's server on this computer (localhost): Windows' media session, or macOS's Spotify /
+ * Music scripting. On the website: the listener shares their Spotify tab (or the Spotify app's
+ * window) and Vayro reads its player bar on this computer (services/spotifyTab.ts).
  */
 export type NowPlayingStatus = 'off' | 'starting' | 'waiting' | 'following' | 'unsupported' | 'error';
 
@@ -58,6 +60,32 @@ async function artworkFor(artist: string, title: string): Promise<string | undef
   return art;
 }
 
+/**
+ * A title read off the screen may hold a misread letter: take the catalogue's spelling when the
+ * catalogue has a song that's clearly the same one (so the lyrics lookup gets the real name).
+ */
+async function canonical(artist: string, title: string, duration?: number): Promise<{ artist: string; title: string; art?: string }> {
+  const lead = artist.split(/s*(?:,|&|feat.?|ft.?)s*/i)[0] ?? '';
+  try {
+    const r = await searchLive(`${lead} ${title}`.trim());
+    // "(Live)", "- Remix" …: versions; only take one when that's what was read
+    const extra = (s: string) => /[([].*?[)]]|s-s/.test(s);
+    const bare = (s: string) => s.replace(/s*[([].*?[)]]/g, '').replace(/s+-s+.*$/, '');
+    const titled = r.tracks.filter((t) => sameText(bare(t.title), bare(title)));
+    // a reading with an artist must match it: never swap in a cover by someone else
+    const byArtist = lead ? titled.filter((t) => t.artist.split(/s*(?:,|&| and |feat.?)s*/i).some((a) => sameText(a, lead))) : titled;
+    // the song's length (read off the player bar) tells versions apart best: live, remix, radio edit…
+    const lengthFits = (t: { duration?: number | null }) => !!duration && !!t.duration && Math.abs(t.duration - duration) <= 2;
+    const hit =
+      byArtist.find((t) => lengthFits(t) && extra(t.title) === extra(title)) ??
+      byArtist.find(lengthFits) ??
+      byArtist.find((t) => extra(t.title) === extra(title)) ??
+      byArtist[0];
+    if (hit) return { artist: hit.artist, title: hit.title, art: hit.artwork ?? undefined };
+  } catch { /* offline: use what was read */ }
+  return { artist, title };
+}
+
 /** "Artist 1, Artist 2" — some apps join artists with semicolons or slashes */
 const cleanArtist = (a: string) => a.split(/\s*[;/]\s*/).filter(Boolean).join(', ');
 
@@ -69,12 +97,15 @@ async function follow(s: SystemState) {
   if (key === songKey) return;
   songKey = key;
   const duration = s.end && s.end > 0 ? s.end - (s.start ?? 0) : undefined;
+  const names = s.fuzzy ? await canonical(artist, s.title, duration) : { artist, title: s.title, art: undefined };
+  if (songKey !== key) return; // the song changed again meanwhile
   const track: Track = {
-    id: `system:${artist}|${s.title}`.toLowerCase(),
+    id: `system:${names.artist}|${names.title}`.toLowerCase(),
     provider: 'system',
     source: appName(s.app),
-    title: s.title,
-    artist: artist || 'Unknown artist',
+    title: names.title,
+    artist: names.artist || 'Unknown artist',
+    artwork: names.art,
     album: s.album || undefined,
     duration,
     streamUrl: '',
@@ -82,7 +113,9 @@ async function follow(s: SystemState) {
     playback: 'FULL_TRACK',
   };
   playTracks([track]);
+  systemPlayer.update({ ...s });
   // the cover arrives a moment later; swap it in without reloading the song
+  if (names.art) return;
   const art = await artworkFor(track.artist, track.title);
   if (art && songKey === key) {
     const st = playerStore.getState();
@@ -131,6 +164,8 @@ export function startNowPlaying() {
   // can't follow the Spotify app. What it does: time-synced lyrics for what plays in Vayro — show
   // them for the current song, or open the Library to pick one.
   if (!CAN_FOLLOW_SPOTIFY) {
+    if (canShareTab()) return startTabFollow();
+    // phones: no tab sharing. Synced lyrics for what plays in Vayro instead
     if (currentTrack()) {
       updateSettings({ view: 'lyrics' });
       closePanels();
@@ -149,9 +184,61 @@ export function startNowPlaying() {
   void poll();
 }
 
+// ---- the website: follow a shared Spotify tab ----------------------------------------------------
+let reader: SpotifyTabReader | null = null;
+const TAB_TIMER = -1; // `timer` marks Now Playing as on; there's no interval in this mode
+
+function startTabFollow() {
+  songKey = '';
+  timer = TAB_TIMER;
+  nowPlayingStore.setState({
+    status: 'starting',
+    app: null,
+    message: 'In the window that just opened, pick your Spotify tab (or the Spotify app’s window) and click Share.',
+  });
+  const onStatus = (st: TabStatus) => {
+    if (reader === null) return;
+    if (st.kind === 'ended') {
+      stopNowPlaying();
+      notify('You stopped sharing Spotify, so the lyrics stopped following it.', 'info');
+    } else if (st.kind === 'looking') {
+      nowPlayingStore.setState({
+        status: 'waiting',
+        app: null,
+        message: 'Play a song in your Spotify tab. Vayro is looking for its player bar — keep that window wide enough to show the times beside the progress bar.',
+      });
+    } else {
+      updateSettings({ view: 'lyrics' });
+      closePanels();
+      nowPlayingStore.setState({ status: 'following', app: 'Spotify', message: null });
+    }
+  };
+  const onState = (s: SystemState) => {
+    if (reader === null) return;
+    // the listener played something else in Vayro: stop following
+    const cur = currentTrack();
+    if (songKey && cur && cur.provider !== 'system') return stopNowPlaying();
+    void follow(s);
+  };
+  const r = new SpotifyTabReader(onState, onStatus);
+  reader = r;
+  r.start().catch((e: Error) => {
+    if (reader !== r) return;
+    stopNowPlaying();
+    notify(
+      e?.name === 'NotAllowedError'
+        ? 'Sharing was cancelled. To sync with Spotify, click Sync lyrics and share your Spotify tab.'
+        : `Couldn’t start following Spotify: ${e?.message ?? e}`,
+      e?.name === 'NotAllowedError' ? 'info' : 'error',
+    );
+  });
+}
+
 export function stopNowPlaying() {
-  if (timer !== null) window.clearInterval(timer);
+  if (timer !== null && timer !== TAB_TIMER) window.clearInterval(timer);
   timer = null;
+  reader?.stop();
+  reader = null;
   songKey = '';
   nowPlayingStore.setState({ status: 'off', app: null, message: null });
 }

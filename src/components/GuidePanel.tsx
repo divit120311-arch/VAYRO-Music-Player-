@@ -167,16 +167,19 @@ export function GuidePanel() {
           </div>
 
           <div data-scroll-main className="scroll-quiet min-h-0 flex-1 overflow-y-auto px-7 pb-6 max-sm:px-5">
-            <Step n={1} title="Play a song in the Spotify app">
+            <Step n={1} title="Play a song on Spotify">
               <p>
-                Open the <b className="text-ink">Spotify desktop app</b> on this computer and play any song — a free account works. Vayro asks your computer (Windows or Mac) what’s playing,
-                so the app needs to be on <b className="text-ink">the same computer</b> as Vayro. On a Mac, the first time, click <b className="text-ink">OK</b> when macOS asks to let Vayro control Spotify.
+                Open <b className="text-ink">Spotify in another browser tab</b> (open.spotify.com) or the Spotify app, and play any song — a free account works. Keep the window wide enough
+                that the times show on both sides of the progress bar.
               </p>
               <SpotifyDrawing />
             </Step>
 
             <Step n={2} title="Click “Sync lyrics”">
-              <p>On Vayro’s home page, click the bright <b className="text-ink">Sync lyrics</b> button. Or open the menu (gear, top right) and choose <b className="text-ink">Sync Spotify lyrics</b>.</p>
+              <p>
+                On Vayro’s home page, click the bright <b className="text-ink">Sync lyrics</b> button (or gear menu → <b className="text-ink">Sync Spotify lyrics</b>). Your browser asks what to share: pick
+                your <b className="text-ink">Spotify tab</b> (or the Spotify app’s window) and click <b className="text-ink">Share</b>. Vayro reads the song and its time from Spotify’s player bar, on this computer only.
+              </p>
               <div className="grid gap-4 lg:grid-cols-2">
                 <Shot
                   src="/guide/1-hero.jpg"

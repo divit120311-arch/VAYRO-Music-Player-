@@ -133,13 +133,13 @@ function NowPlayingRow() {
   const np = useStore(nowPlayingStore, (s) => s);
   const on = np.status !== 'off' && np.status !== 'unsupported';
   const [label, tone]: [string, 'ok' | 'warn' | 'off'] =
-    np.status === 'following' ? [`Following ${np.app ?? 'app'}`, 'ok'] : np.status === 'unsupported' ? ['Windows only', 'off'] : np.status === 'error' ? ['Error', 'warn'] : on ? ['Waiting for a song', 'warn'] : ['Off', 'off'];
+    np.status === 'following' ? [`Following ${np.app ?? 'app'}`, 'ok'] : np.status === 'unsupported' ? ['Not available', 'off'] : np.status === 'error' ? ['Error', 'warn'] : on ? ['Waiting for a song', 'warn'] : ['Off', 'off'];
   return (
     <div className={SRC_ROW} data-testid="source-nowplaying">
       <div className="min-w-0">
         <p className="text-[12.5px] font-medium text-ink-2">Now Playing</p>
         <p className="text-[11px] leading-snug text-ink-3">
-          Full songs with synced lyrics: play a song in the Spotify app (free accounts too) or any music app on this computer, and Vayro shows its lyrics and lights. Works only on the computer running Vayro.
+          Full songs with synced lyrics: play a song on Spotify (free accounts too) in another tab or the Spotify app, start this, and share that tab or window when your browser asks. Vayro reads the song and its time from Spotify’s player bar, on this computer only.
           {np.message && <span className="block text-amber-200/80">{np.message}</span>}
         </p>
         <div className="mt-2">

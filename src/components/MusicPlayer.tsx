@@ -184,7 +184,7 @@ function EmptyStage() {
             transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
             className="mt-4 max-w-[460px] overflow-hidden text-[13.5px] leading-relaxed text-ink-2"
           >
-            <span className="text-ink">Now play a song in the Spotify app on this computer.</span> Its lyrics open here automatically, in time with the music.{' '}
+            <span className="text-ink">{np.message ?? 'Now play a song in the Spotify app on this computer.'}</span> Its lyrics open here automatically, in time with the music.{' '}
             <button type="button" onClick={toggleNowPlaying} className="underline underline-offset-4 hover:text-ink">
               Stop
             </button>
