@@ -4,7 +4,7 @@ import { currentTrack, playTracks, playerStore } from './player';
 import { searchLive } from '../services/libraryCatalog';
 import { updateSettings } from './settings';
 import { notify } from './player';
-import { APP_PLATFORM, CAN_FOLLOW_SPOTIFY, type AppBuild } from '../config/downloads';
+import { CAN_FOLLOW_SPOTIFY } from '../config/downloads';
 import { closePanels, openMusic } from './ui';
 import type { Track } from '../types/music';
 
@@ -127,41 +127,17 @@ async function poll() {
 
 export function startNowPlaying() {
   if (timer !== null) return;
-  // On the website: a web page can't see the visitor's other apps, so it can't follow the Spotify
-  // app. On a Mac or Windows PC, that's what the Vayro app is for: say so and open its download
-  // menu (and still show synced lyrics for whatever plays in Vayro). Elsewhere (phones, Linux),
-  // synced lyrics for songs played in Vayro.
+  // On the website (Windows, Mac, any browser): a web page can't see the visitor's other apps, so it
+  // can't follow the Spotify app. What it does: time-synced lyrics for what plays in Vayro — show
+  // them for the current song, or open the Library to pick one.
   if (!CAN_FOLLOW_SPOTIFY) {
-    const playing = !!currentTrack();
-    if (playing) {
+    if (currentTrack()) {
       updateSettings({ view: 'lyrics' });
       closePanels();
-    }
-    if (APP_PLATFORM) {
-      // the start screen (with the Download button) shows only while nothing plays: then open its
-      // menu; otherwise put the download right on the notice
-      const get = (build: AppBuild) => () => void import('../components/MacDownload').then((m) => m.downloadApp(build));
-      const actions = !playing
-        ? undefined
-        : APP_PLATFORM === 'Windows'
-          ? [{ label: 'Download for Windows', run: get('windows') }]
-          : [
-              { label: 'Mac · Apple Silicon', run: get('appleSilicon') },
-              { label: 'Mac · Intel', run: get('intel') },
-            ];
-      if (playing)
-        notify(
-          `To sync with the Spotify app, get the Vayro app for ${APP_PLATFORM} — websites can’t see your other apps. Meanwhile, lyrics follow the song playing in Vayro.`,
-          'info',
-          actions,
-        );
-      // the menu explains it itself (a notice would sit on top of the buttons around it)
-      else window.dispatchEvent(new Event('vayro:need-app'));
-    } else if (playing) {
       notify('Lyrics in sync with the song playing in Vayro.', 'info');
     } else {
       openMusic('home');
-      notify('Pick any song — its lyrics play in sync with it.', 'info');
+      notify('Pick any song — its lyrics play in sync with it, right here in your browser.', 'info');
     }
     return;
   }

@@ -13,7 +13,6 @@ import { TrackInfo } from './TrackInfo';
 import { Stage, ViewSwitcher } from './StageView';
 import { Artwork, cx } from './ui';
 import { MagneticButton } from './motion';
-import { MacDownload } from './MacDownload';
 
 export function usePlayDemo() {
   const [busy, setBusy] = useState(false);
@@ -202,7 +201,6 @@ function EmptyStage() {
         >
           <BookOpen size={15} strokeWidth={1.9} /> How to make a lyric video
         </button>
-        <MacDownload onPointerMove={followPointer} />
       </motion.div>
     </motion.div>
   );

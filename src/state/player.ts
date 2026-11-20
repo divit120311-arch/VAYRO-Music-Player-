@@ -55,7 +55,7 @@ const set = playerStore.setState;
 export const currentTrack = (s: PlayerState = get()) => (s.index >= 0 ? s.queue[s.index] ?? null : null);
 
 let noticeId = 0;
-/** a button on a notice (e.g. "Download for Windows"); clicking it runs `run` and closes the notice */
+/** a button on a notice; clicking it runs `run` and closes the notice */
 export type NoticeAction = { label: string; run: () => void };
 
 export function notify(text: string, tone: 'info' | 'error' = 'info', actions?: NoticeAction[]) {

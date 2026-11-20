@@ -652,7 +652,7 @@ export async function handle(req, res) {
     if (pathname.startsWith("/api/library") && (await handleLibrary(req, res, pathname, searchParams, sendJson))) return;
     if (pathname === "/api/config" && (await handleProviders(req, res, pathname, searchParams, sendJson))) return;
     // a hosted server must never follow the media of the machine it runs on — that's not the visitor's
-    if (SERVERLESS && pathname.startsWith('/api/nowplaying')) return sendJson(res, 200, { supported: false, error: 'Following the Spotify app needs Vayro running on your own computer (the Mac app).' });
+    if (SERVERLESS && pathname.startsWith('/api/nowplaying')) return sendJson(res, 200, { supported: false, error: 'A website can’t see the Spotify app on your computer. Play songs in Vayro for synced lyrics.' });
     if (pathname.startsWith('/api/nowplaying') && (await handleNowPlaying(req, res, pathname, searchParams, sendJson))) return;
     if (SERVERLESS && pathname.startsWith('/api/transcribe')) return sendJson(res, 501, { error: 'On the website, speech recognition runs in your browser.' });
     if (await handleTranscribe(req, res, pathname, searchParams, sendJson)) return;
