@@ -317,11 +317,52 @@ function scriptOf(text) {
 
 const norm = (s) => (s || '').toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
+// Lyrics in English letters are either the song itself spelt in Roman letters ("Hinglish": tum hi
+// ho, tainu, dil) or an English TRANSLATION of a Hindi / Punjabi song ("you are the one"). Both
+// count as "Latin script", so tell them apart by their everyday words.
+const INDIC_WORDS = new Set(
+  ('hai hain hoon hun ho tha thi mein mai tu tum tera teri tere mera meri mere hum humko tujhe tujhko mujhe mujhko ' +
+    'ka ki ke ko se na nahi nahin naa kya kyun kyon aur bhi toh ye yeh woh vo jo ab sab kuch koi dil pyaar pyar ishq jaan jaana ' +
+    'yaar yaara saath sath bin bina raat din aankhein aankhon zindagi duniya rab sajna sajni mahi mahiya ve nu di da de tainu mainu ' +
+    'menu tenu kithe kive kiven hoya gaya gayi kar karo karke diya liya chal chalo aaja aaye aaya hoke laiyan lagda lagdi nal naal').split(' '),
+);
+const ENGLISH_WORDS = new Set(
+  ('the you and i my me is are was were to of in it your that with be for on this all can dont im we will when what so but not ' +
+    'have just like know love heart never ever there they she he her his our out up now one way no yes oh baby').split(' '),
+);
+/** 'indic' (Devanagari / Gurmukhi script), 'roman' (Hindi / Punjabi in English letters), 'english', or 'other' */
+function lyricLanguage(text) {
+  const s = (text || '').replace(/\[[^\]]*\]/g, ' ');
+  if (/[ऀ-ॿ਀-੿]/.test(s)) {
+    const indic = (s.match(/[ऀ-ॿ਀-੿]/g) || []).length;
+    const latin = (s.match(/[A-Za-z]/g) || []).length;
+    if (indic >= latin) return 'indic';
+  }
+  const words = s.toLowerCase().replace(/'/g, '').match(/[a-z]+/g) || [];
+  if (words.length < 8) return 'other';
+  let hi = 0;
+  let en = 0;
+  for (const w of words) {
+    if (INDIC_WORDS.has(w)) hi++;
+    else if (ENGLISH_WORDS.has(w)) en++;
+  }
+  if (hi >= 4 && hi >= en * 0.6) return 'roman';
+  if (en >= 4 && en > hi * 1.5) return 'english';
+  return 'other';
+}
+
 /** rank LRCLIB candidates: synced first, duration closest, preferred script, artist/title similarity */
+export { lyricLanguage, rankLyrics };
 function rankLyrics(list, { title, artist, duration, script }) {
   const t = norm(title);
   const a = norm(artist);
   const scored = [];
+  // A Hindi / Punjabi song (some version in Devanagari / Gurmukhi or in Hinglish, or an Indic title):
+  // an English-language version of it is a translation, not the song's words. Prefer the real words —
+  // in English letters (Hinglish) when that's the preference, else the native script, which the site
+  // shows in English letters itself. A translation is used only when nothing else exists.
+  const langs = new Map((list || []).map((r) => [r, lyricLanguage(r?.syncedLyrics || r?.plainLyrics)]));
+  const indicSong = /[ऀ-ॿ਀-੿]/.test(title + artist) || [...langs.values()].some((l) => l === 'indic' || l === 'roman');
   for (const r of list || []) {
     if (!r || (!r.syncedLyrics && !r.plainLyrics && !r.instrumental)) continue;
     const diff = duration && r.duration ? Math.abs(r.duration - duration) : null;
@@ -334,7 +375,10 @@ function rankLyrics(list, { title, artist, duration, script }) {
     if (rt === t) score += 25;
     else if (rt.includes(t) || t.includes(rt)) score += 12;
     if (a && norm(r.artistName).includes(a.split(' ')[0])) score += 15;
-    if (script && script !== 'any') score += scriptOf(r.syncedLyrics || r.plainLyrics) === script ? 20 : -10;
+    const lang = langs.get(r);
+    if (indicSong && lang === 'english') score -= 80;
+    else if (indicSong && script === 'latin') score += lang === 'roman' ? 20 : lang === 'indic' ? 8 : 0;
+    else if (script && script !== 'any') score += scriptOf(r.syncedLyrics || r.plainLyrics) === script ? 20 : -10;
     scored.push({ r, score });
   }
   scored.sort((x, y) => y.score - x.score);
@@ -376,7 +420,7 @@ async function handleLyrics(res, params) {
   const script = ['latin', 'native'].includes(params.get('script')) ? params.get('script') : 'any';
   if (!title) return sendJson(res, 400, { error: 'title is required.' });
 
-  const key = `lyrics:${artist}|${title}|${album}|${Math.round(duration)}|${script}`;
+  const key = `lyrics2:${artist}|${title}|${album}|${Math.round(duration)}|${script}`;
   const record = await cachedJson(key, async () => {
     // exact lookup only when we have a trustworthy artist and no script preference
     if (artist && script === 'any') {

@@ -31,7 +31,7 @@ let worker = null;
 let busy = null; // { job, idx, reqId }
 let reqSeq = 0;
 
-const keyOf = (hash, model, lang) => `${hash}.${model}.${lang}`;
+const keyOf = (hash, model, lang) => `${hash}.${model}.${lang === 'auto' ? 'detect' : lang}`;
 const fileOf = (key) => path.join(CACHE_DIR, `${key}.json`);
 
 function getWorker() {
@@ -99,16 +99,18 @@ function scriptOf(words) {
   return max === deva ? 'devanagari' : max === arabic ? 'arabic' : max === latin ? 'latin' : 'other';
 }
 
+let saveSeq = 0;
 async function persist(job) {
   const words = [...job.done.values()].flat().sort((x, y) => x.start - y.start);
   const body = {
-    key: job.key, hash: job.hash, model: job.model, language: job.lang, duration: job.duration,
+    key: job.key, hash: job.hash, model: job.model, language: job.detected ?? job.lang, duration: job.duration,
     complete: job.status === 'done',
     sections: [...job.done.keys()].map((i) => [job.sections[i].a, job.sections[i].b]),
     words, script: scriptOf(words), timings: job.timings, savedAt: new Date().toISOString(),
   };
   await mkdir(CACHE_DIR, { recursive: true });
-  const tmp = `${fileOf(job.key)}.tmp`;
+  // a unique temporary name per save: two saves of one job at once mustn't write into the same file
+  const tmp = `${fileOf(job.key)}.${process.pid}.${++saveSeq}.tmp`;
   await writeFile(tmp, JSON.stringify(body));
   await rename(tmp, fileOf(job.key));
 }
@@ -160,9 +162,18 @@ function pump() {
     const from = Math.max(0, s.a - LEAD);
     const rFrom = Math.max(0, s.a - RETRY_LEAD);
     busy = { job, idx, reqId: ++reqSeq };
+    // language "auto": the first section detects it (from 30 s around a quarter of the way in,
+    // where there's usually singing), the rest reuse it
+    const language = job.lang === 'auto' ? job.detected : job.lang;
+    let detect;
+    if (!language) {
+      const len = job.audio.length;
+      const a = Math.max(0, Math.min(Math.floor(len * 0.25), len - 30 * SR));
+      detect = job.audio.slice(a, Math.min(len, a + 30 * SR));
+    }
     // copies (slice) so the job's buffer stays intact if the worker restarts
     getWorker().postMessage({
-      type: 'section', reqId: busy.reqId, model: job.model, language: job.lang === 'auto' ? undefined : job.lang,
+      type: 'section', reqId: busy.reqId, model: job.model, language, detect,
       audio: job.audio.slice(from, s.b), offsetSec: from / SR, keepFromSec: s.a / SR,
       retry: rFrom < from ? { audio: job.audio.slice(rFrom, s.b), offsetSec: rFrom / SR } : undefined,
     });
@@ -181,6 +192,7 @@ function onWorkerMessage(m) {
   busy = null;
   const job = b.job;
   if (m.type === 'result') {
+    if (job.lang === 'auto' && !job.detected && m.language) job.detected = m.language;
     job.done.set(b.idx, m.words);
     job.recogniseMs += m.ms;
     if (job.timings.first_section_ms == null) job.timings.first_section_ms = Math.round(performance.now() - job.t0);
@@ -216,7 +228,7 @@ function view(job) {
     id: job.key, status: job.status, error: job.error ?? null, progress: total ? done / total : 1,
     sectionsDone: done, sectionsTotal: total, version: job.version, words, script: scriptOf(words),
     timings: { ...job.timings, model_init_ms: job.timings.model_init_ms ?? (modelInit.has(job.model) ? 0 : null) },
-    model: job.model, language: job.lang, duration: job.duration,
+    model: job.model, language: job.detected ?? job.lang, duration: job.duration,
     engine: `onnxruntime-node (native, ${os.cpus().length} threads), Whisper ${job.model} q8`,
   };
 }

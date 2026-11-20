@@ -33,7 +33,7 @@ export interface PreviewAlignment {
 const LISTEN = 12; // seconds of the clip to transcribe: one short recogniser pass
 const CLIP = 30;
 // v6: looser acceptance + a small-model pass, so earlier "couldn't line up" results are retried
-const CACHE = 'afterglow:preview-offset:v7:';
+const CACHE = 'afterglow:preview-offset:v8:'; // v8: language detected (was English by default)
 // words are compared by sound, across scripts and spellings (ਪਿਆਰ = प्यार = pyaar = pyar): see phonetic.ts
 const norm = soundKey;
 
@@ -315,7 +315,7 @@ export function timePlainLines(heard: W[], texts: string[], clip?: number): Lyri
   return clip ? lines.filter((l) => l.end > -8 && l.t < clip + 15) : lines;
 }
 
-const PLAIN_CACHE = 'afterglow:preview-plain:v2:';
+const PLAIN_CACHE = 'afterglow:preview-plain:v3:';
 
 /** untimed lyrics + a 30-second preview → lines timed to the preview's clock, or null */
 export async function timePreviewPlain(track: Track, texts: string[], signal: { cancelled: boolean }): Promise<LyricLine[] | null> {

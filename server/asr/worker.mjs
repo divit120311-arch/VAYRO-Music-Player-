@@ -8,7 +8,7 @@
 //        keepFromSec, offsetSec }
 // out: { type: 'loaded', model, ms } | { type: 'result', reqId, words, ms } | { type: 'error', reqId, message }
 import { parentPort } from 'node:worker_threads';
-import { pipeline, env } from '@huggingface/transformers';
+import { pipeline, env, Tensor } from '@huggingface/transformers';
 
 env.allowLocalModels = false;
 // the desktop app keeps downloaded models in its writable data folder
@@ -57,6 +57,33 @@ async function recognise(asr, audio, language, offsetSec, keepFromSec) {
   return words;
 }
 
+/**
+ * The song's language. transformers.js has no language detection: given no language it silently
+ * uses ENGLISH, and Whisper told "English" while hearing Hindi or Punjabi TRANSLATES the words into
+ * English. So ask the model itself: one decoder step after <|startoftranscript|> scores every
+ * language token; the highest wins. Urdu → Hindi: the same spoken language, and Whisper picks Urdu
+ * for Hindi songs often (Urdu would come out in Arabic script).
+ */
+async function detectLanguage(asr, audio) {
+  const { input_features } = await asr.processor(audio);
+  const cfg = asr.model.generation_config;
+  const sot = cfg.decoder_start_token_id;
+  const out = await asr.model({ input_features, decoder_input_ids: new Tensor('int64', BigInt64Array.from([BigInt(sot)]), [1, 1]) });
+  const logits = out.logits.data;
+  const vocab = out.logits.dims.at(-1);
+  const base = logits.length - vocab; // the last (only) position
+  let best = null;
+  let top = -Infinity;
+  for (const [token, id] of Object.entries(cfg.lang_to_id ?? {})) {
+    const v = logits[base + id];
+    if (v > top) {
+      top = v;
+      best = token.slice(2, -2);
+    }
+  }
+  return best === 'ur' ? 'hi' : best;
+}
+
 /** every word on (nearly) one instant = the word aligner failed for this section */
 function collapsed(words) {
   if (words.length < 3) return false;
@@ -69,13 +96,19 @@ parentPort.on('message', async (m) => {
   try {
     const asr = await load(m.model);
     const audio = new Float32Array(m.audio.buffer, m.audio.byteOffset, m.audio.length);
+    let language = m.language;
+    if (!language && m.detect) {
+      const clip = new Float32Array(m.detect.buffer, m.detect.byteOffset, m.detect.length);
+      language = (await detectLanguage(asr, clip).catch(() => null)) ?? undefined;
+    }
+    m.language = language;
     let words = await recognise(asr, audio, m.language, m.offsetSec, m.keepFromSec);
     // retry a collapsed section with more lead-in context (the caller supplies it as `retry`)
     if (collapsed(words) && m.retry) {
       const r = new Float32Array(m.retry.audio.buffer, m.retry.audio.byteOffset, m.retry.audio.length);
       words = await recognise(asr, r, m.language, m.retry.offsetSec, m.keepFromSec);
     }
-    parentPort.postMessage({ type: 'result', reqId: m.reqId, words, ms: Math.round(performance.now() - t0) });
+    parentPort.postMessage({ type: 'result', reqId: m.reqId, words, language: m.language, ms: Math.round(performance.now() - t0) });
   } catch (err) {
     parentPort.postMessage({ type: 'error', reqId: m.reqId, message: err?.message ?? String(err) });
   }

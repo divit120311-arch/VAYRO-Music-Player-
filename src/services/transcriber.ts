@@ -391,7 +391,7 @@ function viaBrowser(url: string, opts: TranscribeOptions, onProgress: (p: Transc
             first ??= Math.round(performance.now() - t0);
             onPartial(lrc, m.done, m.total);
           }
-        } else if (m.type !== 'device') {
+        } else if (m.type !== 'device' && m.type !== 'language') {
           w!.removeEventListener('message', onMsg);
           w!.removeEventListener('error', onErr);
           if (m.type === 'done') resolve(true);
