@@ -26,7 +26,9 @@ import type Tesseract from 'tesseract.js';
  */
 
 export type TabStatus =
+  | { kind: 'preparing' } // shared; the text reader is still loading (first time: a ~10 MB download)
   | { kind: 'looking' } // sharing, but no Spotify player bar found yet
+  | { kind: 'notFound' } // still no player bar after a while: show what to check
   | { kind: 'following' }
   | { kind: 'ended' }; // the listener stopped sharing
 
@@ -45,8 +47,8 @@ const parseTime = (t: string) => {
 };
 
 /** close enough to be the same title, allowing for a misread letter or two */
-export function sameText(a: string, b: string) {
-  const n = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+export function sameText(a: string, b: string, maxDiff = 0.25) {
+  const n = (s: string) => s.normalize('NFC').toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, '');
   const x = n(a);
   const y = n(b);
   if (!x || !y) return x === y;
@@ -62,7 +64,7 @@ export function sameText(a: string, b: string) {
       prev = tmp;
     }
   }
-  return d[y.length] / Math.max(x.length, y.length) <= 0.25;
+  return d[y.length] / Math.max(x.length, y.length) <= maxDiff;
 }
 
 /** can this browser share a tab / window? (desktop Chrome, Edge, Firefox, Safari: yes; phones: no) */
@@ -72,9 +74,9 @@ export const canShareTab = () =>
 let tesseract: Promise<typeof Tesseract> | null = null;
 const loadTesseract = () => (tesseract ??= import('tesseract.js').then((m) => (m.default ?? m) as typeof Tesseract));
 
-async function makeWorker(params: Partial<Tesseract.WorkerParams>) {
+async function makeWorker(langs: string[], params: Partial<Tesseract.WorkerParams>) {
   const T = await loadTesseract();
-  const w = await T.createWorker('eng', T.OEM.LSTM_ONLY, {
+  const w = await T.createWorker(langs, T.OEM.LSTM_ONLY, {
     workerPath: '/ocr/worker.min.js',
     corePath: '/ocr',
     langPath: '/ocr',
@@ -85,12 +87,42 @@ async function makeWorker(params: Partial<Tesseract.WorkerParams>) {
   return w;
 }
 
+type Workers = { digits: Tesseract.Worker; text: Tesseract.Worker; meta: Tesseract.Worker };
+let workers: Promise<Workers> | null = null;
+/**
+ * Loads the text reader (once per visit; the browser caches its files after the first time). Called
+ * as soon as the listener points at Sync lyrics, so it's usually ready before they've picked a tab.
+ * - digits: the times · text: finding the player bar · meta: the song's title and artist, in English,
+ *   Hindi (Devanagari) or Punjabi (Gurmukhi) script
+ */
+export function preloadReader(): Promise<Workers> {
+  if (!workers) {
+    const p = (async () => {
+      const [digits, text, meta] = await Promise.all([
+        makeWorker(['eng'], { tessedit_pageseg_mode: '7' as Tesseract.PSM, tessedit_char_whitelist: '0123456789:-' }),
+        makeWorker(['eng'], { tessedit_pageseg_mode: '11' as Tesseract.PSM }),
+        makeWorker(['eng', 'hin', 'pan'], { tessedit_pageseg_mode: '11' as Tesseract.PSM }),
+      ]);
+      return { digits, text, meta };
+    })();
+    workers = p;
+    p.catch(() => {
+      if (workers === p) workers = null; // try again next time (e.g. was offline)
+    });
+  }
+  return workers;
+}
+let workersReady = false;
+
 export class SpotifyTabReader {
   private stream: MediaStream | null = null;
   private video: HTMLVideoElement | null = null;
   private canvas = document.createElement('canvas');
   private digits: Tesseract.Worker | null = null;
   private text: Tesseract.Worker | null = null;
+  private meta: Tesseract.Worker | null = null;
+  private lookingSince = 0;
+  private toldNotFound = false;
   private stopped = false;
   private layout: Layout | null = null;
   private misses = 0;
@@ -128,6 +160,9 @@ export class SpotifyTabReader {
 
   /** must be called straight from a click: the browser only opens its share window for one */
   async start() {
+    // the reader loads while the listener picks a tab (the share window is opened first: a browser
+    // only opens it straight from a click)
+    const ready = preloadReader();
     // Chrome / Edge switch to the shared tab by default; keep the listener here, on the lyrics
     type Controller = { setFocusBehavior(b: string): void };
     const W = window as unknown as { CaptureController?: new () => Controller };
@@ -177,12 +212,19 @@ export class SpotifyTabReader {
     this.video = v;
     // ?debug: inspect the reader from the console (window.__tabReader)
     if (new URLSearchParams(location.search).has('debug')) Object.assign(window, { __tabReader: this });
+    if (!workersReady) this.onStatus({ kind: 'preparing' });
+    let w: Workers;
+    try {
+      w = await Promise.race([ready, new Promise<never>((_, no) => setTimeout(() => no(new Error('the text reader took too long to load — check your internet connection')), 90_000))]);
+    } catch (e) {
+      this.stop();
+      throw e;
+    }
+    workersReady = true;
+    if (this.stopped) return;
+    ({ digits: this.digits, text: this.text, meta: this.meta } = w);
+    this.lookingSince = performance.now();
     this.onStatus({ kind: 'looking' });
-    [this.digits, this.text] = await Promise.all([
-      makeWorker({ tessedit_pageseg_mode: '7' as Tesseract.PSM, tessedit_char_whitelist: '0123456789:-' }),
-      makeWorker({ tessedit_pageseg_mode: '11' as Tesseract.PSM }),
-    ]);
-    if (this.stopped) return this.release();
     void this.loop();
   }
 
@@ -196,17 +238,21 @@ export class SpotifyTabReader {
     this.stream = null;
     if (this.video) this.video.srcObject = null;
     this.video = null;
-    void this.digits?.terminate();
-    void this.text?.terminate();
-    this.digits = this.text = null;
+    // the text reader stays loaded: the next Sync lyrics starts instantly
+    this.digits = this.text = this.meta = null;
   }
 
   private async loop() {
     while (!this.stopped) {
       const t0 = performance.now();
       try {
-        if (!this.layout) await this.findLayout();
-        else await this.tick();
+        if (!this.layout) {
+          await this.findLayout();
+          if (!this.layout && !this.toldNotFound && performance.now() - this.lookingSince > 15_000) {
+            this.toldNotFound = true;
+            this.onStatus({ kind: 'notFound' });
+          }
+        } else await this.tick();
       } catch {
         /* a frame that couldn't be read: try the next one */
       }
@@ -298,16 +344,17 @@ export class SpotifyTabReader {
   private async readMeta(first = false) {
     const L = this.layout!;
     const scale = Math.max(1.5, 60 / Math.max(10, L.meta.h / 6.5));
-    const r = await this.text!.recognize(this.grab(L.meta, scale), {}, { blocks: true, text: false });
+    const r = await this.meta!.recognize(this.grab(L.meta, scale), {}, { blocks: true, text: false });
     const lines = (r.data.blocks ?? [])
       .flatMap((b) => b.paragraphs.flatMap((p) => p.lines))
       .map((l) => ({ text: l.words.filter((w) => w.confidence > 35).map((w) => w.text).join(' ').trim(), y: l.bbox.y0, conf: l.confidence }))
-      .filter((l) => /\p{L}{2,}/u.test(l.text) && !TIME.test(l.text))
+      // \p{M}: Devanagari / Gurmukhi vowel signs (matras) sit between letters
+      .filter((l) => /[\p{L}\p{M}]{2,}/u.test(l.text) && !TIME.test(l.text))
       .sort((a, b) => a.y - b.y);
     this.lastMetaAt = performance.now();
     if (!lines.length) return;
-    const title = lines[0].text.replace(/^[^\p{L}\p{N}(]+|[^\p{L}\p{N})!?.]+$/gu, '');
-    const artist = (lines[1]?.text ?? '').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N})]+$/gu, '');
+    const title = lines[0].text.replace(/^[^\p{L}\p{N}(]+|[^\p{L}\p{M}\p{N})!?.]+$/gu, '');
+    const artist = (lines[1]?.text ?? '').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{M}\p{N})]+$/gu, '');
     if (!title) return;
     if (first || !this.title) return this.setSong(title, artist);
     if (sameText(title, this.title)) {

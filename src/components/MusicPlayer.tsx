@@ -5,7 +5,7 @@ import { BookOpen, Loader2, Play, Radio } from 'lucide-react';
 import { useCurrentTrack, usePlayer, playNow, togglePlay, notify } from '../hooks/useAudioPlayer';
 import { useFrame, useVisualizerAnchor } from '../hooks/useAudioAnalyzer';
 import { openGuide, openMusic } from '../state/ui';
-import { nowPlayingStore, toggleNowPlaying } from '../state/nowPlaying';
+import { nowPlayingStore, toggleNowPlaying, warmUpNowPlaying } from '../state/nowPlaying';
 import { useStore } from '../store';
 import { getDemoTrack } from '../services/demoTrack';
 import { audioEngine } from '../engine/audioEngine';
@@ -145,6 +145,8 @@ function EmptyStage() {
       <motion.div {...rise(1.25)} className="mt-10 flex flex-wrap items-center justify-center gap-4">
         <MagneticButton
           onClick={toggleNowPlaying}
+          onPointerEnter={warmUpNowPlaying}
+          onFocus={warmUpNowPlaying}
           aria-pressed={waiting}
           title={waiting ? 'Waiting for a song in Spotify — click to stop' : 'Play a song in the Spotify app on this computer (free accounts too): its lyrics show here, time-synced'}
           className="hero-btn-primary btn-sweep relative inline-flex h-[56px] items-center gap-3 overflow-hidden rounded-full px-9 text-[16px] font-medium"

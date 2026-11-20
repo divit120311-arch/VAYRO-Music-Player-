@@ -6,7 +6,7 @@ import { BookOpen, Compass, FolderOpen, Home as HomeIcon, Library, Link2, ListMu
 import { useStore } from '../store';
 import { closeArtists, closePanels, openGuide, openArtists, openLibrary, openMusic, toggleLibrary, toggleMusic, toggleSettings, uiStore, type LibraryTab } from '../state/ui';
 import { updateSettings } from '../state/settings';
-import { nowPlayingStore, toggleNowPlaying } from '../state/nowPlaying';
+import { nowPlayingStore, toggleNowPlaying, warmUpNowPlaying } from '../state/nowPlaying';
 import { usePlayer, useSettings } from '../hooks/useAudioPlayer';
 import { cx } from './ui';
 
@@ -114,6 +114,7 @@ function HeaderMenu({ items }: { items: MenuItem[] }) {
   const wrap = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
+    warmUpNowPlaying(); // "Sync Spotify lyrics" is in this menu: get its text reader loading
     const down = (e: PointerEvent) => !wrap.current?.contains(e.target as Node) && setOpen(false);
     const key = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
     window.addEventListener('pointerdown', down);

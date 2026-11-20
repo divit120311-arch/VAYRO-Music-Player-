@@ -5,7 +5,8 @@ import { searchLive } from '../services/libraryCatalog';
 import { updateSettings } from './settings';
 import { notify } from './player';
 import { CAN_FOLLOW_SPOTIFY } from '../config/downloads';
-import { SpotifyTabReader, canShareTab, sameText, type TabStatus } from '../services/spotifyTab';
+import { SpotifyTabReader, canShareTab, preloadReader, sameText, type TabStatus } from '../services/spotifyTab';
+import { hasIndicScript, romanize } from '../utils/romanize';
 import { closePanels, openMusic } from './ui';
 import type { Track } from '../types/music';
 
@@ -65,15 +66,20 @@ async function artworkFor(artist: string, title: string): Promise<string | undef
  * catalogue has a song that's clearly the same one (so the lyrics lookup gets the real name).
  */
 async function canonical(artist: string, title: string, duration?: number): Promise<{ artist: string; title: string; art?: string }> {
-  const lead = artist.split(/s*(?:,|&|feat.?|ft.?)s*/i)[0] ?? '';
+  const lead = artist.split(/\s*(?:,|&|\bfeat\.?|\bft\.?)\s*/i)[0] ?? '';
+  // a Hindi / Punjabi title in its own script: the catalogue lists most of these in Latin letters
+  const indic = hasIndicScript(title);
+  const key = indic ? romanize(title) : title;
   try {
-    const r = await searchLive(`${lead} ${title}`.trim());
+    const r = await searchLive(`${lead} ${key}`.trim());
     // "(Live)", "- Remix" …: versions; only take one when that's what was read
-    const extra = (s: string) => /[([].*?[)]]|s-s/.test(s);
-    const bare = (s: string) => s.replace(/s*[([].*?[)]]/g, '').replace(/s+-s+.*$/, '');
-    const titled = r.tracks.filter((t) => sameText(bare(t.title), bare(title)));
+    const extra = (t: string) => /[([].*?[)\]]|\s-\s/.test(t);
+    const bare = (t: string) => t.replace(/\s*[([].*?[)\]]/g, '').replace(/\s+-\s+.*$/, '');
+    // a converted title is spelt loosely (braun munde / Brown Munde): allow more difference
+    const titled = r.tracks.filter((t) => sameText(bare(t.title), bare(key), indic ? 0.4 : 0.25));
     // a reading with an artist must match it: never swap in a cover by someone else
-    const byArtist = lead ? titled.filter((t) => t.artist.split(/s*(?:,|&| and |feat.?)s*/i).some((a) => sameText(a, lead))) : titled;
+    const artists = (t: string) => t.split(/\s*(?:,|&|\band\b|\bfeat\.?|\bft\.?)\s*/i);
+    const byArtist = lead ? titled.filter((t) => artists(t.artist).some((x) => sameText(x, lead))) : titled;
     // the song's length (read off the player bar) tells versions apart best: live, remix, radio edit…
     const lengthFits = (t: { duration?: number | null }) => !!duration && !!t.duration && Math.abs(t.duration - duration) <= 2;
     const hit =
@@ -97,25 +103,43 @@ async function follow(s: SystemState) {
   if (key === songKey) return;
   songKey = key;
   const duration = s.end && s.end > 0 ? s.end - (s.start ?? 0) : undefined;
-  const names = s.fuzzy ? await canonical(artist, s.title, duration) : { artist, title: s.title, art: undefined };
-  if (songKey !== key) return; // the song changed again meanwhile
-  const track: Track = {
-    id: `system:${names.artist}|${names.title}`.toLowerCase(),
-    provider: 'system',
-    source: appName(s.app),
-    title: names.title,
-    artist: names.artist || 'Unknown artist',
-    artwork: names.art,
-    album: s.album || undefined,
-    duration,
-    streamUrl: '',
-    playable: true,
-    playback: 'FULL_TRACK',
+  type Names = { artist: string; title: string; art?: string };
+  const read: Names = { artist, title: s.title };
+  const show = (names: Names) => {
+    const track: Track = {
+      id: `system:${names.artist}|${names.title}`.toLowerCase(),
+      provider: 'system',
+      source: appName(s.app),
+      title: names.title,
+      artist: names.artist || 'Unknown artist',
+      artwork: names.art,
+      album: s.album || undefined,
+      duration,
+      streamUrl: '',
+      playable: true,
+      playback: 'FULL_TRACK',
+    };
+    playTracks([track]);
+    // loading a track resets the player's clock: re-apply the latest reading
+    const latest = systemPlayer.state;
+    systemPlayer.update({ ...(latest ?? s) });
+    return track;
   };
-  playTracks([track]);
-  systemPlayer.update({ ...s });
-  // the cover arrives a moment later; swap it in without reloading the song
+  // A name read off the screen is checked against the catalogue (its spelling, and Latin letters for
+  // Hindi / Punjabi titles). The lyrics don't wait long for that: after 2.5 s they start with the
+  // name as read, and if the catalogue answers later with a better name, the song switches to it.
+  const canon = s.fuzzy ? canonical(artist, s.title, duration) : null;
+  const names = canon ? await Promise.race([canon, new Promise<Names>((r) => setTimeout(() => r(read), 2500))]) : read;
+  if (songKey !== key) return; // the song changed again meanwhile
+  let track = show(names);
+  if (canon && names === read) {
+    const better = await canon;
+    if (songKey !== key) return;
+    if (better.title !== read.title || better.artist !== read.artist) track = show(better);
+    if (better.art) return;
+  }
   if (names.art) return;
+  // the cover arrives a moment later; swap it in without reloading the song
   const art = await artworkFor(track.artist, track.title);
   if (art && songKey === key) {
     const st = playerStore.getState();
@@ -191,25 +215,31 @@ const TAB_TIMER = -1; // `timer` marks Now Playing as on; there's no interval in
 function startTabFollow() {
   songKey = '';
   timer = TAB_TIMER;
-  nowPlayingStore.setState({
-    status: 'starting',
-    app: null,
-    message: 'In the window that just opened, pick your Spotify tab (or the Spotify app’s window) and click Share.',
-  });
+  const pick = 'In the window that just opened, pick your Spotify tab (or the Spotify app’s window) and click Share.';
+  nowPlayingStore.setState({ status: 'starting', app: null, message: pick });
+  notify(pick, 'info');
   const onStatus = (st: TabStatus) => {
     if (reader === null) return;
     if (st.kind === 'ended') {
       stopNowPlaying();
       notify('You stopped sharing Spotify, so the lyrics stopped following it.', 'info');
+    } else if (st.kind === 'preparing') {
+      const message = 'Getting ready to read Spotify… The first time this downloads about 10 MB, so it can take a little while. Don’t click again.';
+      nowPlayingStore.setState({ status: 'waiting', app: null, message });
+      notify(message, 'info');
     } else if (st.kind === 'looking') {
-      nowPlayingStore.setState({
-        status: 'waiting',
-        app: null,
-        message: 'Play a song in your Spotify tab. Vayro is looking for its player bar — keep that window wide enough to show the times beside the progress bar.',
-      });
+      const message = 'Reading your Spotify tab… Play a song there if nothing is playing. The lyrics open here in a few seconds.';
+      nowPlayingStore.setState({ status: 'waiting', app: null, message });
+      notify(message, 'info');
+    } else if (st.kind === 'notFound') {
+      const message =
+        'Vayro can’t find Spotify’s player bar in what you shared. Check that you shared the Spotify tab (not another one), a song is playing, and the window is wide enough to show the times on both sides of the progress bar.';
+      nowPlayingStore.setState({ status: 'waiting', app: null, message });
+      notify(message, 'error');
     } else {
       updateSettings({ view: 'lyrics' });
       closePanels();
+      if (nowPlayingStore.getState().status !== 'following') notify('Found Spotify — lyrics are following it now.', 'info');
       nowPlayingStore.setState({ status: 'following', app: 'Spotify', message: null });
     }
   };
@@ -241,6 +271,11 @@ export function stopNowPlaying() {
   reader = null;
   songKey = '';
   nowPlayingStore.setState({ status: 'off', app: null, message: null });
+}
+
+/** start loading the Spotify-tab reader early (pointer over / focus on a Sync lyrics button) */
+export function warmUpNowPlaying() {
+  if (!CAN_FOLLOW_SPOTIFY && canShareTab()) void preloadReader().catch(() => {});
 }
 
 export const toggleNowPlaying = () => (timer === null ? startNowPlaying() : stopNowPlaying());
