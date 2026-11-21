@@ -1,4 +1,5 @@
 import type { SystemState } from '../engine/systemPlayer';
+import { ReadingClock } from '../engine/readingClock';
 import type Tesseract from 'tesseract.js';
 
 /**
@@ -37,12 +38,28 @@ type Layout = { elapsed: Box; total: Box; meta: Box };
 
 const TIME = /^-?(\d{1,2}):([0-5]\d)$/;
 const TICK_MS = 250;
+/** (comparison/measurement) localStorage "vayro:reader-fixed" = "1": read every 250 ms, as before */
+const READ_FIXED = (() => {
+  try {
+    return localStorage.getItem('vayro:reader-fixed') === '1';
+  } catch {
+    return false;
+  }
+})();
 const META_EVERY_MS = 2000;
 
 const parseTime = (t: string) => {
   const m = t.trim().replace(/[Oo]/g, '0').replace(/[lI|]/g, '1').match(TIME);
   return m ? Number(m[1]) * 60 + Number(m[2]) : null;
 };
+
+/** a name that reads as words ("Zehr Vibe, Intense"), not stray marks ("iS)") */
+export function readableName(s: string) {
+  const t = s.trim();
+  if (!/[\p{L}\p{M}]{3,}/u.test(t)) return false;
+  const letters = (t.match(/[\p{L}\p{M}]/gu) ?? []).length;
+  return letters / t.replace(/\s+/g, '').length >= 0.6;
+}
 
 /** close enough to be the same title, allowing for a misread letter or two */
 export function sameText(a: string, b: string, maxDiff = 0.25) {
@@ -125,7 +142,6 @@ export class SpotifyTabReader {
   private misses = 0;
 
   // timing
-  private lastSec: number | null = null;
   private lastReadAt = 0;
   /** when the newest frame of the shared picture was captured, and when it arrived (performance.now()) */
   private frameAt = 0;
@@ -155,8 +171,9 @@ export class SpotifyTabReader {
     const controller = W.CaptureController ? new W.CaptureController() : undefined;
     const stream = await navigator.mediaDevices.getDisplayMedia({
       ...(controller ? { controller } : {}),
-      // full resolution: Spotify's times are small text
-      video: { displaySurface: 'browser', frameRate: { ideal: 8, max: 15 }, width: { ideal: 3840 }, height: { ideal: 2160 } },
+      // the tab's own size (never enlarged: copying from a bigger picture costs every reading). Only
+      // the small parts that get read are enlarged, when they're copied
+      video: { displaySurface: 'browser', frameRate: { ideal: 8, max: 15 }, width: { max: 2560 }, height: { max: 1600 } },
       audio: false,
       // offer tabs and windows (the Spotify app), not this tab and not whole screens
       selfBrowserSurface: 'exclude',
@@ -242,7 +259,10 @@ export class SpotifyTabReader {
       } catch {
         /* a frame that couldn't be read: try the next one */
       }
-      const wait = (this.layout ? TICK_MS : 900) - (performance.now() - t0);
+      const now = performance.now();
+      const wait = this.layout
+        ? (READ_FIXED ? TICK_MS - (now - t0) : this.clock.nextReadIn(now, Math.max(0, TICK_MS - (now - t0))))
+        : 900 - (now - t0);
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     }
   }
@@ -251,7 +271,7 @@ export class SpotifyTabReader {
    * Copies part of the current frame, scaled up and turned into dark text on white (what the
    * recogniser reads best — Spotify's text is light on dark).
    */
-  private grab(box: Box, scale: number) {
+  private async grab(box: Box, scale: number) {
     const v = this.video!;
     // a fresh canvas per read: the time and the title are read at the same time
     const c = document.createElement('canvas');
@@ -259,8 +279,26 @@ export class SpotifyTabReader {
     c.height = Math.max(1, Math.round(box.h * scale));
     const g = c.getContext('2d', { willReadFrequently: true })!;
     g.imageSmoothingQuality = 'high';
-    g.drawImage(v, box.x, box.y, box.w, box.h, 0, 0, c.width, c.height);
+    const t0 = performance.now();
+    // Crop (and enlarge) the picture where it lives — usually the GPU — and copy back only that
+    // part. Drawing the whole video frame into this (CPU) canvas copied the entire frame back on
+    // every reading: measured, the single biggest cost of following a Spotify tab.
+    let bmp: ImageBitmap | null = null;
+    try {
+      bmp = await createImageBitmap(v, Math.round(box.x), Math.round(box.y), Math.max(1, Math.round(box.w)), Math.max(1, Math.round(box.h)), {
+        resizeWidth: c.width,
+        resizeHeight: c.height,
+        resizeQuality: 'high',
+      });
+    } catch {
+      bmp = null; // not supported here: the direct way
+    }
+    if (bmp) {
+      g.drawImage(bmp, 0, 0);
+      bmp.close();
+    } else g.drawImage(v, box.x, box.y, box.w, box.h, 0, 0, c.width, c.height);
     const img = g.getImageData(0, 0, c.width, c.height);
+    this.stats.grabMs += performance.now() - t0;
     const d = img.data;
     // average brightness decides which way round the text is (light or dark theme)
     let sum = 0;
@@ -286,7 +324,7 @@ export class SpotifyTabReader {
     const strip: Box = { x: 0, y: Math.round(H * 0.8), w: W, h: H - Math.round(H * 0.8) };
     // Spotify's times are ~12 px: enlarge so they're ~30 px tall for the recogniser
     const scale = Math.min(3, Math.max(1.6, 3600 / W));
-    const r = await this.text.recognize(this.grab(strip, scale), {}, { blocks: true, text: false });
+    const r = await this.text.recognize(await this.grab(strip, scale), {}, { blocks: true, text: false });
     if (this.stopped) return;
     const words = (r.data.blocks ?? []).flatMap((b) => b.paragraphs.flatMap((p) => p.lines.flatMap((l) => l.words)));
     const toFrame = (bb: Tesseract.Bbox): Box => ({ x: strip.x + bb.x0 / scale, y: strip.y + bb.y0 / scale, w: (bb.x1 - bb.x0) / scale, h: (bb.y1 - bb.y0) / scale });
@@ -322,7 +360,7 @@ export class SpotifyTabReader {
   private shotAt = 0;
   private async readTime(box: Box) {
     this.shotAt = this.framesTimed ? this.frameAt : performance.now();
-    const r = await this.digits!.recognize(this.grab(box, Math.max(2, 36 / box.h)), {}, { text: true });
+    const r = await this.digits!.recognize(await this.grab(box, Math.max(2, 36 / box.h)), {}, { text: true });
     const t = r.data.text.replace(/\s+/g, '');
     const m = t.match(/(\d{1,2}):([0-5]\d)/);
     return m ? Number(m[1]) * 60 + Number(m[2]) : null;
@@ -332,14 +370,34 @@ export class SpotifyTabReader {
   private static lines(r: Tesseract.RecognizeResult) {
     const lines = (r.data.blocks ?? [])
       .flatMap((b) => b.paragraphs.flatMap((p) => p.lines))
-      .map((l) => ({ text: l.words.filter((w) => w.confidence > 35).map((w) => w.text).join(' ').trim(), y: l.bbox.y0, conf: l.confidence }))
+      .map((l) => ({
+        text: l.words.filter((w) => w.confidence > 35).map((w) => w.text).join(' ').trim(),
+        x: l.bbox.x0,
+        y: l.bbox.y0,
+        h: l.bbox.y1 - l.bbox.y0,
+        conf: l.confidence,
+      }))
       // \p{M}: Devanagari / Gurmukhi vowel signs (matras) sit between letters
       .filter((l) => /[\p{L}\p{M}]{2,}/u.test(l.text) && !TIME.test(l.text))
       .sort((a, b) => a.y - b.y);
-    if (!lines.length) return null;
-    const title = lines[0].text.replace(/^[^\p{L}\p{N}(]+|[^\p{L}\p{M}\p{N})!?.]+$/gu, '');
-    const artist = (lines[1]?.text ?? '').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{M}\p{N})]+$/gu, '');
-    return title ? { title, artist, conf: lines[0].conf } : null;
+    // the title and the artist sit one above the other, starting at the same x — a pair stray text
+    // from the cover art doesn't form. Title: the top line of such a pair (any script; a title in
+    // Gurmukhi reads with lower confidence, so confidence doesn't decide); failing that, the top line
+    const words = lines.filter((l) => /[\p{L}\p{M}]{3,}/u.test(l.text));
+    const below = (l: (typeof lines)[number]) => lines.some((m) => m !== l && m.y > l.y && m.y - l.y < l.h * 4 && Math.abs(m.x - l.x) <= Math.max(12, l.h * 1.5));
+    const t = words.find(below) ?? words[0] ?? lines[0];
+    if (!t) return null;
+    const title = t.text.replace(/^[^\p{L}\p{N}(]+|[^\p{L}\p{M}\p{N})!?.]+$/gu, '');
+    // the artist: the line right under the title, starting where the title starts — text off to
+    // the left of it is the cover art, not the artist
+    const under = lines.filter((l) => l !== t && l.y > t.y && l.y - t.y < t.h * 4);
+    const a =
+      under.find((l) => Math.abs(l.x - t.x) <= Math.max(12, t.h * 1.5)) ??
+      // a title in Gurmukhi / Devanagari doesn't start exactly where the Latin artist line does:
+      // the next line down, if it reads as a name
+      under.find((l) => readableName(l.text));
+    const artist = (a?.text ?? '').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{M}\p{N})]+$/gu, '');
+    return title ? { title, artist: readableName(artist) ? artist : '', conf: t.conf } : null;
   }
 
   /**
@@ -351,7 +409,7 @@ export class SpotifyTabReader {
     const L = this.layout!;
     // enlarged so the title is ~34 px tall: what the reader needs, no more (bigger is just slower)
     const scale = Math.min(3, Math.max(1, 34 / Math.max(8, L.meta.h / 6.5)));
-    const read = (w: Tesseract.Worker) => w.recognize(this.grab(L.meta, scale), {}, { blocks: true, text: false }).then(SpotifyTabReader.lines);
+    const read = async (w: Tesseract.Worker) => w.recognize(await this.grab(L.meta, scale), {}, { blocks: true, text: false }).then(SpotifyTabReader.lines);
     if (!full) {
       const quick = await read(this.text!);
       // still the same song: done (the common case, and the cheap one)
@@ -366,6 +424,9 @@ export class SpotifyTabReader {
     const indic = /[\u0900-\u097F\u0A00-\u0A7F]/.test(all.title);
     // a Latin title read equally well by both: the English reading (its spelling is the better one)
     if (!indic) return en.conf >= all.conf - 5 ? en : all;
+    // the English reader can't read a Hindi / Punjabi title at all, and then takes the ARTIST line
+    // for the title — confidently. That's a sure sign the title is the one in Indian script.
+    if (all.artist && sameText(en.title, all.artist, 0.3)) return all;
     return all.conf > en.conf ? all : en;
   }
 
@@ -385,6 +446,7 @@ export class SpotifyTabReader {
     if (sameText(title, this.title)) {
       this.pendingTitle = '';
       if (total && total > 0) this.total = total;
+      if (!this.artist && artist) this.artist = artist; // read at last: the lyrics can be looked up now
       return;
     }
     const afterJump = this.jumpAt > this.songAt && shot >= this.jumpAt;
@@ -419,23 +481,17 @@ export class SpotifyTabReader {
    * pins the position to within the gap between two readings), and none of this depends on how
    * often the readings come: a slow computer gives fewer, later readings, never a frozen clock.
    */
-  private clock: { pos: number; at: number; playing: boolean } | null = null;
-  /** when the number now showing was first seen, and the reading before that */
-  private secFirstSeen = 0;
-  private prevReadAt = 0;
-  /** a reading far from the clock (seek / new song / misread), waiting for a second one to agree */
-  private farReading: { sec: number; at: number } | null = null;
+  /** the song's position, from the time readings (see engine/readingClock.ts) */
+  private clock = new ReadingClock();
   /** readings in a row that found no new picture */
   private samePicture = 0;
 
-  private predict(at: number) {
-    const c = this.clock!;
-    return c.playing ? c.pos + (at - c.at) / 1000 : c.pos;
-  }
-
   private async tick() {
     const L = this.layout!;
+    const t0 = performance.now();
     const sec = await this.readTime(L.elapsed);
+    this.stats.reads++;
+    this.stats.ocrMs += performance.now() - t0;
     const at = this.shotAt; // when the picture was captured
     if (this.stopped) return;
     if (sec === null) {
@@ -447,6 +503,7 @@ export class SpotifyTabReader {
       return;
     }
     this.misses = 0;
+    this.stats.shown = sec;
     // The same picture as last time: no new information. A tab only sends pictures when something
     // on it changes, and a playing song's time changes every second: no new picture for a good while
     // means it's paused.
@@ -454,59 +511,18 @@ export class SpotifyTabReader {
       // each such reading proves this page was free to receive a new picture and none came; a page
       // that was busy (loading lyrics…) gets no pictures either, so a few late ones alone don't count
       this.samePicture++;
-      if (this.clock?.playing && this.samePicture >= 10 && performance.now() - this.frameArrived > 4000) {
-        this.clock = { pos: sec + 0.5, at, playing: false };
+      if (this.clock.state?.playing && this.samePicture >= 10 && performance.now() - this.frameArrived > 4000) {
+        this.clock.stall(sec, at);
         this.emit();
       }
       return;
     }
     this.samePicture = 0;
-
-    const prev = this.lastReadAt;
     this.lastReadAt = at;
-    if (sec !== this.lastSec) {
-      this.prevReadAt = prev;
-      this.secFirstSeen = at;
-    }
-    const ticked = this.lastSec !== null && sec === this.lastSec + 1 && prev > 0 && at - prev < 1500;
-    this.lastSec = sec;
-
-    // the range this reading allows: [sec, sec + 1) — narrower right after the number ticked over
-    // (it changed between the previous reading and this one)
-    const lo = sec;
-    const hi = ticked ? sec + Math.min(0.999, (at - this.prevReadAt) / 1000) : sec + 0.999;
-    // the number hasn't changed for over a second (plus slack for picture timing): paused
-    const still = at - this.secFirstSeen > 1250;
-
-    if (!this.clock) {
-      this.clock = { pos: (lo + hi) / 2, at, playing: true };
-    } else {
-      const pred = this.predict(at);
-      const off = pred < lo ? pred - lo : pred > hi ? pred - hi : 0;
-      if (Math.abs(off) > 2.5) {
-        // far off: a seek, a new song — or a misread digit. Believe it when a second reading agrees
-        // (allowing for the time that passed between them)
-        const f = this.farReading;
-        const agrees = f && Math.abs(sec - (f.sec + (at - f.at) / 1000)) <= 1.5;
-        if (!agrees) {
-          this.farReading = { sec, at };
-          return this.emit();
-        }
-        this.farReading = null;
-        this.clock = { pos: (lo + hi) / 2, at, playing: !still };
-        this.jumpAt = at; // check the title now (a new song?)
-        this.metaWanted = true;
-      } else {
-        this.farReading = null;
-        // inside the range: the clock is right — keep it (it's more precise than one reading)
-        // outside: move it just inside
-        // playing unless the number has stood still; a paused clock resumes when the number moves
-        const playing = still ? false : this.clock.playing || this.secFirstSeen === at;
-        let pos = off === 0 ? pred : off < 0 ? lo + 0.02 : hi - 0.02;
-        // stopped somewhere within the second showing: its middle is never more than 0.5 s off
-        if (!playing) pos = this.clock.playing ? lo + 0.5 : Math.min(Math.max(pos, lo), hi - 0.02);
-        this.clock = { pos, at, playing };
-      }
+    const result = this.clock.observe(sec, at);
+    if (result === 'jump') {
+      this.jumpAt = at; // check the title now (a new song?)
+      this.metaWanted = true;
     }
     this.emit();
     // the title (new song?) and the total length now and then — on their own, so the time keeps
@@ -514,42 +530,107 @@ export class SpotifyTabReader {
     if (!this.metaBusy && (this.metaWanted || performance.now() - this.lastMetaAt > this.metaEvery)) void this.refreshMeta();
   }
 
+  /** diagnostics (Settings → Now Playing → Details) */
+  readonly stats = { reads: 0, ocrMs: 0, grabMs: 0, shown: null as number | null, since: performance.now() };
+  diagnostics() {
+    const secs = Math.max(1, (performance.now() - this.stats.since) / 1000);
+    return {
+      title: this.title,
+      artist: this.artist,
+      total: this.total,
+      shown: this.stats.shown,
+      position: this.clock.state ? this.clock.predict(performance.now()) : null,
+      playing: !!this.clock.state?.playing,
+      uncertainty: this.clock.uncertainty,
+      lastCorrection: this.clock.lastCorrection,
+      readsPerSecond: this.stats.reads / secs,
+      readingMsPerSecond: this.stats.ocrMs / secs,
+      found: !!this.layout,
+    };
+  }
+
   private metaBusy = false;
   /** how often to re-read the title: every 2 s, less often when reading it is slow (slow computer) */
   private metaEvery = META_EVERY_MS;
   private async refreshMeta() {
     this.metaBusy = true;
+    const wanted = this.metaWanted;
     this.metaWanted = false;
     const t0 = performance.now();
     try {
+      // Same song? Compare a 32 × 8 thumbnail of the title + cover area with the one from the last
+      // read: unchanged (and nothing else asks for a read) = same song, no text reading needed.
+      // That makes the check nearly free, so it runs every second and a new song is noticed at once.
+      const sig = await this.metaSignature();
+      const same = !!sig && !!this.lastSig && SpotifyTabReader.sigDiff(sig, this.lastSig) < 6;
+      if (same && !wanted && this.title && this.artist) {
+        this.lastMetaAt = performance.now();
+        return;
+      }
       await this.readMeta();
+      this.lastSig = sig;
     } catch {
       /* next time */
     } finally {
       this.metaBusy = false;
-      this.metaEvery = Math.max(META_EVERY_MS, (performance.now() - t0) * 1.5);
+      // the thumbnail check is cheap: every second; a text read that was slow spaces them out
+      this.metaEvery = Math.max(1000, Math.min(META_EVERY_MS, (performance.now() - t0) * 0.5));
+      if (this.title && !this.artist) this.metaWanted = true;
     }
   }
+
+  private lastSig: Uint8Array | null = null;
+  /** brightness of a 32 × 8 grid over the title + cover area */
+  private async metaSignature(): Promise<Uint8Array | null> {
+    const L = this.layout;
+    const v = this.video;
+    if (!L || !v) return null;
+    const w = 32;
+    const h = 8;
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const g = c.getContext('2d', { willReadFrequently: true })!;
+    try {
+      const bmp = await createImageBitmap(v, Math.round(L.meta.x), Math.round(L.meta.y), Math.max(1, Math.round(L.meta.w)), Math.max(1, Math.round(L.meta.h)), { resizeWidth: w, resizeHeight: h, resizeQuality: 'medium' });
+      g.drawImage(bmp, 0, 0);
+      bmp.close();
+    } catch {
+      g.drawImage(v, L.meta.x, L.meta.y, L.meta.w, L.meta.h, 0, 0, w, h);
+    }
+    const d = g.getImageData(0, 0, w, h).data;
+    const out = new Uint8Array(w * h);
+    for (let i = 0; i < out.length; i++) out[i] = (d[i * 4] * 0.3 + d[i * 4 + 1] * 0.59 + d[i * 4 + 2] * 0.11) | 0;
+    return out;
+  }
+  /** average brightness difference (0–255) between two thumbnails */
+  static sigDiff(a: Uint8Array, b: Uint8Array) {
+    let sum = 0;
+    for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]);
+    return sum / a.length;
+  }
+
 
   /** the total length, read with its own worker (the time worker stays free for the elapsed time) */
   private async readTotal() {
     const L = this.layout;
     if (!L || !this.text) return null;
-    const r = await this.text.recognize(this.grab(L.total, Math.max(2, 36 / L.total.h)), {}, { text: true });
+    const r = await this.text.recognize(await this.grab(L.total, Math.max(2, 36 / L.total.h)), {}, { text: true });
     const m = r.data.text.replace(/\s+/g, '').match(/(\d{1,2}):([0-5]\d)/);
     return m ? Number(m[1]) * 60 + Number(m[2]) : null;
   }
 
   /** passes the clock on to the player (extrapolated to this moment) */
   private emit() {
-    if (!this.title || !this.clock) return;
+    const c = this.clock.state;
+    if (!this.title || !c) return;
     const now = performance.now();
     this.onState({
       app: 'Spotify',
       title: this.title,
       artist: this.artist,
-      status: this.clock.playing ? 'Playing' : 'Paused',
-      position: this.predict(now),
+      status: c.playing ? 'Playing' : 'Paused',
+      position: this.clock.predict(now),
       start: 0,
       end: this.total || undefined,
       receivedAt: Date.now(),

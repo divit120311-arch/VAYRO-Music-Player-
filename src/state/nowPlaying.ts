@@ -54,7 +54,9 @@ async function artworkFor(artist: string, title: string): Promise<string | undef
   try {
     const r = await searchLive(`${artist} ${title}`);
     const norm = (s: string) => s.toLowerCase().replace(/\s*[([].*?[)\]]/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
-    const hit = r.tracks.find((t) => norm(t.title) === norm(title)) ?? r.tracks[0];
+    // the same title by the same artist, or no cover at all (never another song's)
+    const lead = artist.split(/\s*(?:,|&|\bfeat\.?|\bft\.?)\s*/i)[0] ?? '';
+    const hit = r.tracks.find((t) => norm(t.title) === norm(title) && !!lead && t.artist.split(/\s*(?:,|&|\band\b|\bfeat\.?)\s*/i).some((a) => sameText(a, lead)));
     art = hit?.artwork ?? undefined;
   } catch { /* no artwork */ }
   artCache.set(k, art);
@@ -271,6 +273,11 @@ export function stopNowPlaying() {
   reader = null;
   songKey = '';
   nowPlayingStore.setState({ status: 'off', app: null, message: null });
+}
+
+/** live details of Sync lyrics for Settings → Now Playing → Details (null = not following a tab) */
+export function nowPlayingDiagnostics() {
+  return reader?.diagnostics() ?? null;
 }
 
 /** start loading the Spotify-tab reader early (pointer over / focus on a Sync lyrics button) */

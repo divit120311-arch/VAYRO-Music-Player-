@@ -16,3 +16,17 @@ describe('sameText (titles read off the screen)', () => {
     expect(sameText('', 'One Dance')).toBe(false);
   });
 });
+
+import { readableName } from './spotifyTab';
+describe('readableName (an artist line read off the screen)', () => {
+  it('accepts real names in any script', () => {
+    expect(readableName('Zehr Vibe, Intense, Sardar Khehra')).toBe(true);
+    expect(readableName('Drake, Wizkid, Kyla')).toBe(true);
+    expect(readableName('अरिजीत सिंह')).toBe(true);
+  });
+  it('rejects stray marks from cover art', () => {
+    expect(readableName('iS)')).toBe(false);
+    expect(readableName('|| -- ~')).toBe(false);
+    expect(readableName('')).toBe(false);
+  });
+});

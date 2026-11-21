@@ -1,4 +1,4 @@
-import { apiJson } from './musicProvider';
+import { ApiError, apiJson } from './musicProvider';
 import { looksLikeLrc, parseLrc, parseLyricsfile } from '../utils/lrc';
 import type { LyricsDoc, UserLyricsSource } from '../types/lyrics';
 import type { Track } from '../types/music';
@@ -49,14 +49,80 @@ export const reliableArtist = (a?: string) => !!a && !/^(local file|unknown arti
  * Nothing is cached in the bundle or on disk — lyrics are fetched for the track being played.
  */
 export async function lookupLyrics(track: Track, duration: number, script: 'any' | 'latin' | 'native', signal?: AbortSignal): Promise<LyricsLookup> {
+  // a song read off a shared Spotify tab without a readable artist: a title alone matches other
+  // artists' songs (e.g. a different "Sensation"), so don't guess
+  if (track.provider === 'system' && !reliableArtist(track.artist)) return { kind: 'none' };
   const title = cleanTitle(track.title) || track.title;
   const qs = new URLSearchParams({ title });
   if (reliableArtist(track.artist)) qs.set('artist', track.artist);
   if (track.album) qs.set('album', track.album);
   if (duration > 0) qs.set('duration', String(Math.round(duration)));
   if (script !== 'any') qs.set('script', script);
-  const r = await apiJson<LyricsResponse>(`/api/lyrics?${qs}`, signal);
-  return toLookup(r);
+  return shared(`/api/lyrics?${qs}`, signal);
+}
+
+/**
+ * One lookup per song version at a time, remembered for a while: the next-track prefetch, the song
+ * starting, a settings change re-checking… all share one request. The key is the full query (title,
+ * artist, album, length, script), so different recordings never share an answer. A lookup that
+ * failed isn't remembered.
+ */
+const lookups = new Map<string, { at: number; p: Promise<LyricsLookup> }>();
+const FOUND_TTL = 30 * 60_000;
+const NONE_TTL = 5 * 60_000;
+function shared(path: string, signal?: AbortSignal): Promise<LyricsLookup> {
+  const hit = lookups.get(path);
+  let entry = hit;
+  if (!entry || Date.now() - entry.at > FOUND_TTL) {
+    const p = withRetry(() => apiJson<LyricsResponse>(path)).then(toLookup);
+    entry = { at: Date.now(), p };
+    lookups.set(path, entry);
+    p.then(
+      (r) => {
+        // "not found" is re-checked sooner (lyrics get added to LRCLIB all the time)
+        if (r.kind === 'none') entry!.at = Date.now() - (FOUND_TTL - NONE_TTL);
+      },
+      () => lookups.get(path) === entry && lookups.delete(path),
+    );
+    if (lookups.size > 300) lookups.delete(lookups.keys().next().value!);
+  }
+  return abortable(entry.p, signal);
+}
+
+/** a shared promise, given up on by one caller (its song changed) without cancelling it for others */
+function abortable<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return p;
+  if (signal.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
+  return new Promise<T>((resolve, reject) => {
+    const stop = () => reject(new DOMException('Aborted', 'AbortError'));
+    signal.addEventListener('abort', stop, { once: true });
+    p.then(
+      (v) => (signal.removeEventListener('abort', stop), resolve(v)),
+      (e) => (signal.removeEventListener('abort', stop), reject(e)),
+    );
+  });
+}
+
+/**
+ * Retries a temporary failure (server unreachable, 5xx, rate-limited) twice, after 0.6 s and 1.5 s;
+ * a definite answer (4xx) isn't retried. Never loops.
+ */
+export async function withRetry<T>(fn: () => Promise<T>, delays = [600, 1500]): Promise<T> {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const status = e instanceof ApiError ? e.status : undefined;
+      const temporary = e instanceof ApiError && (e.code === 'backend_down' || status === 429 || (status !== undefined && status >= 500));
+      if (!temporary || i >= delays.length) throw e;
+      await new Promise((r) => setTimeout(r, delays[i]));
+    }
+  }
+}
+
+/** (tests) forget remembered lookups */
+export function clearLyricsLookups() {
+  lookups.clear();
 }
 
 export interface LyricsCandidate {

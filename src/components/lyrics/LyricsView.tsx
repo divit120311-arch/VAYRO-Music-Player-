@@ -6,6 +6,7 @@ import {
   cancelTranscription, canTranscribe, lyricsStore, nudgeOffset, playWithoutWaiting, removeUserLyrics, resetOffset, retryLyrics, savedLyricsText, setUserLyrics, stepLine, transcribeCurrent,
 } from '../../state/lyrics';
 import { updateSettings } from '../../state/settings';
+import { nowPlayingStore } from '../../state/nowPlaying';
 import { useCurrentTrack, usePlayer, useSettings } from '../../hooks/useAudioPlayer';
 import { LyricsSearch } from './LyricsSearch';
 import { hasGurmukhi, hasIndicScript, romanize } from '../../utils/translit';
@@ -225,6 +226,7 @@ function SyncingLyrics({ waiting }: { waiting: boolean }) {
 /** The lyrics stage: status handling, the animated lyrics, and a quiet toolbar. */
 export function LyricsView({ compact }: { compact?: boolean }) {
   const track = useCurrentTrack();
+  const np = useStore(nowPlayingStore, (s) => s);
   const st = useStore(lyricsStore, (s) => s);
   const style = useSettings((s) => s.lyricsStyle);
   const size = useSettings((s) => s.lyricsSize);
@@ -344,6 +346,12 @@ export function LyricsView({ compact }: { compact?: boolean }) {
               doc.attribution
             )}
           </span>
+          {np.status === 'following' && track?.provider === 'system' && (
+            <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-[2px] ring-1 ring-line" title="Lyrics follow the song playing in Spotify">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" aria-hidden />
+              Following {np.app ?? 'Spotify'}
+            </span>
+          )}
           <span className="rounded-full px-2 py-[2px] ring-1 ring-line">
             {doc.kind === 'plain' ? 'Not time-synced' : doc.hasWordSync ? 'Word-synced' : 'Line-synced · word timing estimated'}
           </span>

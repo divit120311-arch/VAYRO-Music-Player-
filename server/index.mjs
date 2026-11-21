@@ -351,8 +351,38 @@ function lyricLanguage(text) {
   return 'other';
 }
 
+/**
+ * Does a lyrics record's artist match the one asked for? Any one name in common is enough
+ * ("Afusic, Talwiinder" ~ "Talwinder"), allowing a misspelt letter or two. Without this, a search by
+ * title alone happily returns another artist's song with the same title and a similar length.
+ */
+function editRatio(a, b) {
+  const d = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = d[0];
+    d[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = d[j];
+      d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = tmp;
+    }
+  }
+  return d[b.length] / Math.max(a.length, b.length, 1);
+}
+const artistNames = (s) =>
+  (s || '')
+    .split(/\s*(?:,|&|\/|;|\bfeat\.?|\bft\.?|\bfeaturing\b|\bwith\b|\bx\b|\band\b)\s*/i)
+    .map((x) => norm(x).replace(/\s+/g, ''))
+    .filter((x) => x.length >= 2);
+function artistMatches(asked, found) {
+  const a = artistNames(asked);
+  const f = artistNames(found);
+  if (!a.length || !f.length) return false;
+  return a.some((x) => f.some((y) => x === y || (Math.min(x.length, y.length) >= 4 && (x.includes(y) || y.includes(x))) || editRatio(x, y) <= 0.25));
+}
+
 /** rank LRCLIB candidates: synced first, duration closest, preferred script, artist/title similarity */
-export { lyricLanguage, rankLyrics };
+export { lyricLanguage, rankLyrics, artistMatches };
 function rankLyrics(list, { title, artist, duration, script }) {
   const t = norm(title);
   const a = norm(artist);
@@ -420,7 +450,7 @@ async function handleLyrics(res, params) {
   const script = ['latin', 'native'].includes(params.get('script')) ? params.get('script') : 'any';
   if (!title) return sendJson(res, 400, { error: 'title is required.' });
 
-  const key = `lyrics2:${artist}|${title}|${album}|${Math.round(duration)}|${script}`;
+  const key = `lyrics3:${artist}|${title}|${album}|${Math.round(duration)}|${script}`;
   const record = await cachedJson(key, async () => {
     // exact lookup only when we have a trustworthy artist and no script preference
     if (artist && script === 'any') {
@@ -428,7 +458,7 @@ async function handleLyrics(res, params) {
       if (album) qs.set('album_name', album);
       if (duration >= 1 && duration <= 3600) qs.set('duration', String(Math.round(duration)));
       const hit = await lrclib(`/api/get?${qs}`);
-      if (hit && (hit.syncedLyrics || hit.instrumental)) return hit;
+      if (hit && (hit.syncedLyrics || hit.instrumental) && artistMatches(artist, hit.artistName)) return hit;
     }
     // search: with the artist when known, otherwise by title alone — the duration match is what
     // makes a title-only search reliable (untagged files, "Song (From Movie).mp3" downloads…)
@@ -444,6 +474,9 @@ async function handleLyrics(res, params) {
       if (!artist) {
         if (!duration) return null;
         ranked = ranked.filter((r) => bare(r.trackName) === bare(title) && r.duration && Math.abs(r.duration - duration) <= 2);
+      } else {
+        // an artist was given: never another artist's song that happens to share the title
+        ranked = ranked.filter((r) => artistMatches(artist, r.artistName));
       }
       if (ranked[0]) return ranked[0];
     }

@@ -1,8 +1,9 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ChevronDown, Maximize2, RotateCcw, X } from 'lucide-react';
 import { LightColourRow, TextColourRow } from './ThemeSelector';
-import { nowPlayingStore, toggleNowPlaying } from '../state/nowPlaying';
+import { nowPlayingDiagnostics, nowPlayingStore, toggleNowPlaying } from '../state/nowPlaying';
+import { lyricsStore } from '../state/lyrics';
 import { LYRIC_STYLES } from './lyrics/LyricsView';
 import { LyricsPreview } from './lyrics/LyricsPreview';
 import { TranscribeDiagnostics } from './lyrics/TranscribeDiagnostics';
@@ -129,7 +130,42 @@ function Pill({ tone, children }: { tone: 'ok' | 'warn' | 'off'; children: React
 }
 
 /** Now Playing mode: follow the Spotify app (or any music app) on this computer */
+/** Sync lyrics, in detail: what's being read off the Spotify tab and how closely it's followed */
+function SyncDetails() {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((n) => n + 1), 500);
+    return () => window.clearInterval(id);
+  }, []);
+  const d = nowPlayingDiagnostics();
+  const ly = lyricsStore.getState();
+  const fmt = (s: number | null) => (s == null ? '—' : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`);
+  const rows: [string, string][] = d
+    ? [
+        ['Spotify player bar', d.found ? 'found' : 'looking for it…'],
+        ['Song read', d.title ? `${d.title}${d.artist ? ' — ' + d.artist : ' (artist not read yet)'}` : '—'],
+        ['Spotify shows', `${fmt(d.shown)} of ${fmt(d.total || null)}`],
+        ['Vayro is at', d.position == null ? '—' : `${d.position.toFixed(2)} s · ${d.playing ? 'playing' : 'paused'}`],
+        ['Timing precision', `± ${(d.uncertainty / 2).toFixed(2)} s`],
+        ['Last correction', `${d.lastCorrection >= 0 ? '+' : ''}${d.lastCorrection.toFixed(2)} s`],
+        ['Readings', `${d.readsPerSecond.toFixed(1)} / s · ${Math.round(d.readingMsPerSecond)} ms of reading per second`],
+        ['Lyrics', ly.status === 'ready' && ly.doc ? (ly.doc.kind === 'plain' ? 'not time-synced' : ly.doc.hasWordSync ? 'word-synced' : 'line-synced') + (ly.doc.attribution ? ` · ${ly.doc.attribution}` : '') : ly.status],
+      ]
+    : [['Status', 'Not following a Spotify tab (Sync lyrics is off, or runs on this computer’s server).']];
+  return (
+    <dl className="mt-2 grid grid-cols-[auto,1fr] gap-x-3 gap-y-0.5 rounded-lg bg-white/[0.03] p-2 text-[11px] leading-snug">
+      {rows.map(([k, v]) => (
+        <div key={k} className="contents">
+          <dt className="text-ink-3">{k}</dt>
+          <dd className="min-w-0 truncate text-ink-2" title={v}>{v}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function NowPlayingRow() {
+  const [details, setDetails] = useState(false);
   const np = useStore(nowPlayingStore, (s) => s);
   const on = np.status !== 'off' && np.status !== 'unsupported';
   const [label, tone]: [string, 'ok' | 'warn' | 'off'] =
@@ -146,6 +182,10 @@ function NowPlayingRow() {
           <button type="button" onClick={toggleNowPlaying} className={cx('h-7 rounded-full px-3 text-[11.5px] ring-1', on ? 'text-ink-2 ring-line hover:text-ink' : 'bg-ink font-semibold text-black ring-transparent')}>
             {on ? 'Stop following' : 'Start Now Playing'}
           </button>
+          <button type="button" onClick={() => setDetails((v) => !v)} aria-expanded={details} className="ml-2 h-7 rounded-full px-3 text-[11.5px] text-ink-3 ring-1 ring-line hover:text-ink">
+            {details ? 'Hide details' : 'Details'}
+          </button>
+          {details && <SyncDetails />}
         </div>
       </div>
       <Pill tone={tone}>{label}</Pill>
