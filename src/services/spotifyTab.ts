@@ -38,8 +38,6 @@ type Layout = { elapsed: Box; total: Box; meta: Box };
 const TIME = /^-?(\d{1,2}):([0-5]\d)$/;
 const TICK_MS = 250;
 const META_EVERY_MS = 2000;
-/** the same second showing for this long → paused (a second lasts 1000 ms; margin for slow readings) */
-const PAUSE_AFTER_MS = 1500;
 
 const parseTime = (t: string) => {
   const m = t.trim().replace(/[Oo]/g, '0').replace(/[lI|]/g, '1').match(TIME);
@@ -117,7 +115,6 @@ let workersReady = false;
 export class SpotifyTabReader {
   private stream: MediaStream | null = null;
   private video: HTMLVideoElement | null = null;
-  private canvas = document.createElement('canvas');
   private digits: Tesseract.Worker | null = null;
   private text: Tesseract.Worker | null = null;
   private meta: Tesseract.Worker | null = null;
@@ -134,11 +131,6 @@ export class SpotifyTabReader {
   private frameAt = 0;
   private frameArrived = 0;
   private framesTimed = false;
-  /** the current second began no earlier than this (performance.now()) */
-  private secSince = 0;
-  /** performance.now() at which the song was at `basePos` */
-  private baseAt = 0;
-  private basePos = 0;
   private total = 0;
 
   // song
@@ -146,12 +138,6 @@ export class SpotifyTabReader {
   private artist = '';
   private pendingTitle = '';
   private lastMetaAt = 0;
-  /** the time jumped (likely a new song): the next title read that differs switches at once */
-  private jumped = false;
-  /** an unconfirmed jump to this second */
-  private jumpTo: number | null = null;
-  /** readings in a row that say "paused" */
-  private stillReads = 0;
 
   constructor(
     private onState: (s: SystemState) => void,
@@ -267,7 +253,8 @@ export class SpotifyTabReader {
    */
   private grab(box: Box, scale: number) {
     const v = this.video!;
-    const c = this.canvas;
+    // a fresh canvas per read: the time and the title are read at the same time
+    const c = document.createElement('canvas');
     c.width = Math.max(1, Math.round(box.w * scale));
     c.height = Math.max(1, Math.round(box.h * scale));
     const g = c.getContext('2d', { willReadFrequently: true })!;
@@ -296,7 +283,7 @@ export class SpotifyTabReader {
     if (!v || !this.text || !v.videoWidth) return;
     const W = v.videoWidth;
     const H = v.videoHeight;
-    const strip: Box = { x: 0, y: Math.round(H * 0.72), w: W, h: H - Math.round(H * 0.72) };
+    const strip: Box = { x: 0, y: Math.round(H * 0.8), w: W, h: H - Math.round(H * 0.8) };
     // Spotify's times are ~12 px: enlarge so they're ~30 px tall for the recogniser
     const scale = Math.min(3, Math.max(1.6, 3600 / W));
     const r = await this.text.recognize(this.grab(strip, scale), {}, { blocks: true, text: false });
@@ -328,6 +315,7 @@ export class SpotifyTabReader {
     this.misses = 0;
     this.total = parseTime(tot.w.text) ?? 0;
     await this.readMeta(true);
+    this.lastMetaAt = performance.now();
   }
 
   /** reads a time; `at`: when the picture it was read from was captured */
@@ -340,54 +328,116 @@ export class SpotifyTabReader {
     return m ? Number(m[1]) * 60 + Number(m[2]) : null;
   }
 
-  /** title (first line) and artist (second line) of the player bar */
-  private async readMeta(first = false) {
-    const L = this.layout!;
-    const scale = Math.max(1.5, 60 / Math.max(10, L.meta.h / 6.5));
-    const r = await this.meta!.recognize(this.grab(L.meta, scale), {}, { blocks: true, text: false });
+  /** title (first line) and artist (second line) from one OCR result */
+  private static lines(r: Tesseract.RecognizeResult) {
     const lines = (r.data.blocks ?? [])
       .flatMap((b) => b.paragraphs.flatMap((p) => p.lines))
       .map((l) => ({ text: l.words.filter((w) => w.confidence > 35).map((w) => w.text).join(' ').trim(), y: l.bbox.y0, conf: l.confidence }))
       // \p{M}: Devanagari / Gurmukhi vowel signs (matras) sit between letters
       .filter((l) => /[\p{L}\p{M}]{2,}/u.test(l.text) && !TIME.test(l.text))
       .sort((a, b) => a.y - b.y);
-    this.lastMetaAt = performance.now();
-    if (!lines.length) return;
+    if (!lines.length) return null;
     const title = lines[0].text.replace(/^[^\p{L}\p{N}(]+|[^\p{L}\p{M}\p{N})!?.]+$/gu, '');
     const artist = (lines[1]?.text ?? '').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{M}\p{N})]+$/gu, '');
-    if (!title) return;
-    if (first || !this.title) return this.setSong(title, artist);
+    return title ? { title, artist, conf: lines[0].conf } : null;
+  }
+
+  /**
+   * The player bar's title and artist. Read with the quick English reader first; only when that
+   * can't make sense of it (a title in Devanagari / Gurmukhi) with the slower English + Hindi +
+   * Punjabi one.
+   */
+  private async readNames(full = false) {
+    const L = this.layout!;
+    // enlarged so the title is ~34 px tall: what the reader needs, no more (bigger is just slower)
+    const scale = Math.min(3, Math.max(1, 34 / Math.max(8, L.meta.h / 6.5)));
+    const read = (w: Tesseract.Worker) => w.recognize(this.grab(L.meta, scale), {}, { blocks: true, text: false }).then(SpotifyTabReader.lines);
+    if (!full) {
+      const quick = await read(this.text!);
+      // still the same song: done (the common case, and the cheap one)
+      if (quick && this.title && sameText(quick.title, this.title)) return quick;
+    }
+    // A (possibly) new title: read it both ways and keep the more confident reading. The English
+    // reader turns Hindi / Punjabi letters into confident-looking nonsense ("get et"), and the
+    // English + Hindi + Punjabi one sometimes reads a Latin title as Gurmukhi: each is right where
+    // the other is unsure.
+    const [en, all] = await Promise.all([read(this.text!), read(this.meta!)]);
+    if (!en || !all) return en ?? all;
+    const indic = /[\u0900-\u097F\u0A00-\u0A7F]/.test(all.title);
+    // a Latin title read equally well by both: the English reading (its spelling is the better one)
+    if (!indic) return en.conf >= all.conf - 5 ? en : all;
+    return all.conf > en.conf ? all : en;
+  }
+
+
+  /**
+   * Is a different song playing? A different title read twice in a row switches; once is enough
+   * right after the time jumped (back to the start, usually) or when the length changed too. A
+   * single misread mid-song never switches.
+   */
+  private async readMeta(first = false) {
+    const shot = this.framesTimed ? this.frameAt : performance.now();
+    const [names, total] = await Promise.all([this.readNames(first || !this.title), first ? Promise.resolve(null) : this.readTotal().catch(() => null)]);
+    this.lastMetaAt = performance.now();
+    if (!names) return;
+    const { title, artist } = names;
+    if (first || !this.title) return await this.setSong(title, artist);
     if (sameText(title, this.title)) {
       this.pendingTitle = '';
+      if (total && total > 0) this.total = total;
       return;
     }
-    // a different title twice in a row, or right after the time jumped: a new song (a single
-    // misread mid-song doesn't switch)
-    const jumped = this.jumped;
-    this.jumped = false;
-    if (jumped || (this.pendingTitle && sameText(title, this.pendingTitle))) this.setSong(title, artist);
+    const afterJump = this.jumpAt > this.songAt && shot >= this.jumpAt;
+    const newLength = !!total && !!this.total && Math.abs(total - this.total) > 2;
+    if (afterJump || newLength || (this.pendingTitle && sameText(title, this.pendingTitle))) await this.setSong(title, artist, total);
     else this.pendingTitle = title;
   }
 
-  private setSong(title: string, artist: string) {
+  private async setSong(title: string, artist: string, total?: number | null) {
+    this.pendingTitle = '';
+    // title, artist and length switch together: a stale length from the previous song makes the
+    // lyrics lookup reject every version of the new one as "a different edit"
+    const t = total ?? (await this.readTotal().catch(() => null));
+    this.total = t && t > 0 ? t : 0;
     this.title = title;
     this.artist = artist;
-    this.pendingTitle = '';
+    this.songAt = this.framesTimed ? this.frameAt : performance.now();
     this.onStatus({ kind: 'following' });
+  }
+  /** when the current song was recognised, and when the time last jumped (picture times) */
+  private songAt = 0;
+  private jumpAt = 0;
+  private metaWanted = false;
+
+  /**
+   * One reading of Spotify's elapsed time, turned into the song's position.
+   *
+   * Spotify shows whole seconds, so a reading "1:23" taken from a picture captured at time t means:
+   * at t the song was somewhere in [83, 84). Vayro keeps its own running clock (position + whether
+   * it's playing) and only corrects it when a reading says it's outside that range — by the least
+   * amount needed. Readings tighten the estimate as they come in (the moment the number ticks over
+   * pins the position to within the gap between two readings), and none of this depends on how
+   * often the readings come: a slow computer gives fewer, later readings, never a frozen clock.
+   */
+  private clock: { pos: number; at: number; playing: boolean } | null = null;
+  /** when the number now showing was first seen, and the reading before that */
+  private secFirstSeen = 0;
+  private prevReadAt = 0;
+  /** a reading far from the clock (seek / new song / misread), waiting for a second one to agree */
+  private farReading: { sec: number; at: number } | null = null;
+  /** readings in a row that found no new picture */
+  private samePicture = 0;
+
+  private predict(at: number) {
+    const c = this.clock!;
+    return c.playing ? c.pos + (at - c.at) / 1000 : c.pos;
   }
 
   private async tick() {
     const L = this.layout!;
     const sec = await this.readTime(L.elapsed);
-    const now = this.shotAt;
+    const at = this.shotAt; // when the picture was captured
     if (this.stopped) return;
-    // the same picture as last time: nothing new. A tab only sends pictures when something on it
-    // changes, and a playing song changes its time every second: so no picture for a while = paused
-    if (this.framesTimed && now === this.lastReadAt && sec !== null) {
-      if (this.title && performance.now() - this.frameArrived > PAUSE_AFTER_MS + 1000)
-        this.onState({ app: 'Spotify', title: this.title, artist: this.artist, status: 'Paused', position: sec + 0.5, start: 0, end: this.total || undefined, receivedAt: Date.now(), tolerance: 0.2, fuzzy: true });
-      return;
-    }
     if (sec === null) {
       // the bar moved (window resized, Spotify's layout changed…): look for it again
       if (++this.misses >= 8) {
@@ -397,67 +447,114 @@ export class SpotifyTabReader {
       return;
     }
     this.misses = 0;
-    // a jump (seek, new song) is believed once a second reading agrees: one misread digit
-    // ("1:28" read as "1:23") mustn't throw the lyrics around
-    if (this.lastSec !== null && sec !== this.lastSec && sec !== this.lastSec + 1) {
-      const confirmed = this.jumpTo !== null && (sec === this.jumpTo || sec === this.jumpTo + 1);
-      if (!confirmed) {
-        this.jumpTo = sec;
-        return;
+    // The same picture as last time: no new information. A tab only sends pictures when something
+    // on it changes, and a playing song's time changes every second: no new picture for a good while
+    // means it's paused.
+    if (this.framesTimed && at === this.lastReadAt) {
+      // each such reading proves this page was free to receive a new picture and none came; a page
+      // that was busy (loading lyrics…) gets no pictures either, so a few late ones alone don't count
+      this.samePicture++;
+      if (this.clock?.playing && this.samePicture >= 10 && performance.now() - this.frameArrived > 4000) {
+        this.clock = { pos: sec + 0.5, at, playing: false };
+        this.emit();
       }
+      return;
     }
-    this.jumpTo = null;
-    const prevRead = this.lastReadAt;
-    this.lastReadAt = now;
-    if (this.lastSec === null) {
-      // first reading: somewhere within this second
-      this.basePos = sec + 0.5;
-      this.baseAt = now;
-      this.secSince = now;
-    } else if (sec !== this.lastSec) {
-      if (sec === this.lastSec + 1 && prevRead) {
-        // ticked over between the previous reading and this one (and no more than a second ago,
-        // or it would show the next number): the second began about halfway through that window
-        const earliest = Math.max(prevRead, now - 1000);
-        this.basePos = sec + (now - (earliest + now) / 2) / 1000;
-        this.secSince = earliest;
-      } else {
-        // a jump (seek, or a new song starting): phase unknown until the next tick; check the title now
-        this.basePos = sec + 0.5;
-        this.jumped = true;
-        this.lastMetaAt = 0;
-        this.secSince = now;
-      }
-      this.baseAt = now;
+    this.samePicture = 0;
+
+    const prev = this.lastReadAt;
+    this.lastReadAt = at;
+    if (sec !== this.lastSec) {
+      this.prevReadAt = prev;
+      this.secFirstSeen = at;
     }
+    const ticked = this.lastSec !== null && sec === this.lastSec + 1 && prev > 0 && at - prev < 1500;
     this.lastSec = sec;
-    // Paused: the same second has been showing for clearly longer than a second. Judged from the
-    // readings themselves, so a slow moment on this computer (readings further apart) isn't mistaken
-    // for a pause.
-    // …and only after a few such readings in a row, so a single late picture doesn't count
-    this.stillReads = now - this.secSince < PAUSE_AFTER_MS ? 0 : this.stillReads + 1;
-    const playing = this.stillReads < 3;
-    if (this.title) {
-      const t = performance.now();
-      this.onState({
-        app: 'Spotify',
-        title: this.title,
-        artist: this.artist,
-        status: playing ? 'Playing' : 'Paused',
-        position: playing ? this.basePos + (t - this.baseAt) / 1000 : sec + 0.5,
-        start: 0,
-        end: this.total || undefined,
-        receivedAt: Date.now(),
-        tolerance: 0.2,
-        fuzzy: true,
-      });
+
+    // the range this reading allows: [sec, sec + 1) — narrower right after the number ticked over
+    // (it changed between the previous reading and this one)
+    const lo = sec;
+    const hi = ticked ? sec + Math.min(0.999, (at - this.prevReadAt) / 1000) : sec + 0.999;
+    // the number hasn't changed for over a second (plus slack for picture timing): paused
+    const still = at - this.secFirstSeen > 1250;
+
+    if (!this.clock) {
+      this.clock = { pos: (lo + hi) / 2, at, playing: true };
+    } else {
+      const pred = this.predict(at);
+      const off = pred < lo ? pred - lo : pred > hi ? pred - hi : 0;
+      if (Math.abs(off) > 2.5) {
+        // far off: a seek, a new song — or a misread digit. Believe it when a second reading agrees
+        // (allowing for the time that passed between them)
+        const f = this.farReading;
+        const agrees = f && Math.abs(sec - (f.sec + (at - f.at) / 1000)) <= 1.5;
+        if (!agrees) {
+          this.farReading = { sec, at };
+          return this.emit();
+        }
+        this.farReading = null;
+        this.clock = { pos: (lo + hi) / 2, at, playing: !still };
+        this.jumpAt = at; // check the title now (a new song?)
+        this.metaWanted = true;
+      } else {
+        this.farReading = null;
+        // inside the range: the clock is right — keep it (it's more precise than one reading)
+        // outside: move it just inside
+        // playing unless the number has stood still; a paused clock resumes when the number moves
+        const playing = still ? false : this.clock.playing || this.secFirstSeen === at;
+        let pos = off === 0 ? pred : off < 0 ? lo + 0.02 : hi - 0.02;
+        // stopped somewhere within the second showing: its middle is never more than 0.5 s off
+        if (!playing) pos = this.clock.playing ? lo + 0.5 : Math.min(Math.max(pos, lo), hi - 0.02);
+        this.clock = { pos, at, playing };
+      }
     }
-    // the title (new song?) and total now and then; slower, so after the reading is passed on
-    if (now - this.lastMetaAt > META_EVERY_MS) {
+    this.emit();
+    // the title (new song?) and the total length now and then — on their own, so the time keeps
+    // being read meanwhile (the title reader is the slowest part)
+    if (!this.metaBusy && (this.metaWanted || performance.now() - this.lastMetaAt > this.metaEvery)) void this.refreshMeta();
+  }
+
+  private metaBusy = false;
+  /** how often to re-read the title: every 2 s, less often when reading it is slow (slow computer) */
+  private metaEvery = META_EVERY_MS;
+  private async refreshMeta() {
+    this.metaBusy = true;
+    this.metaWanted = false;
+    const t0 = performance.now();
+    try {
       await this.readMeta();
-      const tot = await this.readTime(L.total);
-      if (tot && tot > 0) this.total = tot;
+    } catch {
+      /* next time */
+    } finally {
+      this.metaBusy = false;
+      this.metaEvery = Math.max(META_EVERY_MS, (performance.now() - t0) * 1.5);
     }
   }
 
+  /** the total length, read with its own worker (the time worker stays free for the elapsed time) */
+  private async readTotal() {
+    const L = this.layout;
+    if (!L || !this.text) return null;
+    const r = await this.text.recognize(this.grab(L.total, Math.max(2, 36 / L.total.h)), {}, { text: true });
+    const m = r.data.text.replace(/\s+/g, '').match(/(\d{1,2}):([0-5]\d)/);
+    return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+  }
+
+  /** passes the clock on to the player (extrapolated to this moment) */
+  private emit() {
+    if (!this.title || !this.clock) return;
+    const now = performance.now();
+    this.onState({
+      app: 'Spotify',
+      title: this.title,
+      artist: this.artist,
+      status: this.clock.playing ? 'Playing' : 'Paused',
+      position: this.predict(now),
+      start: 0,
+      end: this.total || undefined,
+      receivedAt: Date.now(),
+      tolerance: 0.15,
+      fuzzy: true,
+    });
+  }
 }
