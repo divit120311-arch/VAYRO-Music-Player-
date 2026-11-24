@@ -56,7 +56,8 @@ async function artworkFor(artist: string, title: string): Promise<string | undef
     const norm = (s: string) => s.toLowerCase().replace(/\s*[([].*?[)\]]/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
     // the same title by the same artist, or no cover at all (never another song's)
     const lead = artist.split(/\s*(?:,|&|\bfeat\.?|\bft\.?)\s*/i)[0] ?? '';
-    const hit = r.tracks.find((t) => norm(t.title) === norm(title) && !!lead && t.artist.split(/\s*(?:,|&|\band\b|\bfeat\.?)\s*/i).some((a) => sameText(a, lead)));
+    const bare = (x: string) => x.replace(/\s*[([].*?[)\]]/g, '').replace(/\s+-\s+.*$/, '');
+    const hit = r.tracks.find((t) => (norm(t.title) === norm(title) || sameText(bare(t.title), bare(title))) && !!lead && t.artist.split(/\s*(?:,|&|\band\b|\bfeat\.?)\s*/i).some((a) => sameText(a, lead)));
     art = hit?.artwork ?? undefined;
   } catch { /* no artwork */ }
   artCache.set(k, art);
@@ -141,8 +142,9 @@ async function follow(s: SystemState) {
     if (better.art) return;
   }
   if (names.art) return;
-  // the cover arrives a moment later; swap it in without reloading the song
-  const art = await artworkFor(track.artist, track.title);
+  // the cover arrives a moment later; swap it in without reloading the song. The catalogue's
+  // (sharp) one when it surely is this song; otherwise the one Spotify shows in the shared tab
+  const art = (await artworkFor(track.artist, track.title)) ?? (s.fuzzy ? ((await reader?.coverImage().catch(() => null)) ?? undefined) : undefined);
   if (art && songKey === key) {
     const st = playerStore.getState();
     const q = st.queue.map((t) => (t.id === track.id ? { ...t, artwork: art } : t));

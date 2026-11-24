@@ -397,7 +397,8 @@ export class SpotifyTabReader {
       // the next line down, if it reads as a name
       under.find((l) => readableName(l.text));
     const artist = (a?.text ?? '').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{M}\p{N})]+$/gu, '');
-    return title ? { title, artist: readableName(artist) ? artist : '', conf: t.conf } : null;
+    const bottom = a ? a.y + a.h : t.y + t.h;
+    return title ? { title, artist: readableName(artist) ? artist : '', conf: t.conf, x: t.x, top: t.y, bottom } : null;
   }
 
   /**
@@ -409,7 +410,11 @@ export class SpotifyTabReader {
     const L = this.layout!;
     // enlarged so the title is ~34 px tall: what the reader needs, no more (bigger is just slower)
     const scale = Math.min(3, Math.max(1, 34 / Math.max(8, L.meta.h / 6.5)));
-    const read = async (w: Tesseract.Worker) => w.recognize(await this.grab(L.meta, scale), {}, { blocks: true, text: false }).then(SpotifyTabReader.lines);
+    const read = async (w: Tesseract.Worker) => {
+      const r = SpotifyTabReader.lines(await w.recognize(await this.grab(L.meta, scale), {}, { blocks: true, text: false }));
+      if (r) this.namesBox = { x: L.meta.x + r.x / scale, top: L.meta.y + r.top / scale, bottom: L.meta.y + r.bottom / scale };
+      return r;
+    };
     if (!full) {
       const quick = await read(this.text!);
       // still the same song: done (the common case, and the cheap one)
@@ -580,6 +585,101 @@ export class SpotifyTabReader {
   }
 
   private lastSig: Uint8Array | null = null;
+  /** where the title + artist were last read (shared picture's pixels): the cover sits to their left */
+  private namesBox: { x: number; top: number; bottom: number } | null = null;
+
+  /**
+   * The song's cover, copied from the shared Spotify tab: the square picture to the left of the
+   * title and artist in the player bar. Found from the picture itself (the run of columns, then
+   * rows, that differ from the bar's background next to the text), so it doesn't depend on exact
+   * sizes; refused if it comes out blank or flat. A JPEG data URL, or null.
+   */
+  async coverImage(): Promise<string | null> {
+    const v = this.video;
+    const nb = this.namesBox;
+    if (!v || !nb || !v.videoWidth) return null;
+    const block = Math.max(8, nb.bottom - nb.top); // title + artist height ≈ 0.6 × the cover's
+    const cy = (nb.top + nb.bottom) / 2;
+    // a generous search area: up to ~3 cover widths to the left of the text, a cover height above/below
+    const sx = Math.max(0, Math.round(nb.x - block * 4.5));
+    const sw = Math.max(1, Math.round(nb.x - block * 0.15) - sx);
+    const sy = Math.max(0, Math.round(cy - block * 1.6));
+    const sh = Math.min(v.videoHeight - sy, Math.round(block * 3.2));
+    if (sw < block || sh < block) return null;
+    const c = document.createElement('canvas');
+    c.width = sw;
+    c.height = sh;
+    const g = c.getContext('2d', { willReadFrequently: true })!;
+    try {
+      const bmp = await createImageBitmap(v, sx, sy, sw, sh);
+      g.drawImage(bmp, 0, 0);
+      bmp.close();
+    } catch {
+      g.drawImage(v, sx, sy, sw, sh, 0, 0, sw, sh);
+    }
+    const d = g.getImageData(0, 0, sw, sh).data;
+    const lum = (x: number, y: number) => {
+      const i = (y * sw + x) * 4;
+      return d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11;
+    };
+    // the bar's background: the column right next to the text
+    let bg = 0;
+    for (let y = 0; y < sh; y++) bg += lum(sw - 1, y);
+    bg /= sh;
+    const differs = (x: number, y: number) => Math.abs(lum(x, y) - bg) > 14;
+    const colHits = (x: number) => {
+      let n = 0;
+      for (let y = 0; y < sh; y++) if (differs(x, y)) n++;
+      return n / sh;
+    };
+    // the cover: the run of "different" columns nearest the text
+    let right = -1;
+    for (let x = sw - 1; x >= 0; x--) if (colHits(x) > 0.3) {
+      right = x;
+      break;
+    }
+    if (right < 0) return null;
+    let left = right;
+    while (left > 0 && colHits(left - 1) > 0.15) left--;
+    const width = right - left + 1;
+    if (width < block * 0.8) return null;
+    const rowHits = (y: number) => {
+      let n = 0;
+      for (let x = left; x <= right; x++) if (differs(x, y)) n++;
+      return n / width;
+    };
+    // grow out from the text's middle row, stopping at plain background: whatever lies beyond it
+    // (the page above Spotify's bar) isn't part of the cover
+    const mid = Math.min(sh - 1, Math.max(0, Math.round(cy - sy)));
+    let top = mid;
+    let bottom = mid;
+    while (top > 0 && rowHits(top - 1) >= 0.3) top--;
+    while (bottom < sh - 1 && rowHits(bottom + 1) >= 0.3) bottom++;
+    const height = bottom - top + 1;
+    // a cover is square: otherwise this isn't one
+    if (height < width * 0.75 || height > width * 1.33) return null;
+    // blank (no picture loaded yet): not worth showing — a plain-coloured cover still counts
+    let sum = 0;
+    let sq = 0;
+    let n = 0;
+    for (let y = top; y <= bottom; y += 2)
+      for (let x = left; x <= right; x += 2) {
+        const l = lum(x, y);
+        sum += l;
+        sq += l * l;
+        n++;
+      }
+    const sd = Math.sqrt(Math.max(0, sq / n - (sum / n) ** 2));
+    if (sd < 3) return null;
+    const side = Math.min(width, height);
+    const out = document.createElement('canvas');
+    const size = Math.max(side, Math.min(320, side * 4));
+    out.width = out.height = size;
+    const og = out.getContext('2d')!;
+    og.imageSmoothingQuality = 'high';
+    og.drawImage(c, left + (width - side) / 2, top + (height - side) / 2, side, side, 0, 0, size, size);
+    return out.toDataURL('image/jpeg', 0.9);
+  }
   /** brightness of a 32 × 8 grid over the title + cover area */
   private async metaSignature(): Promise<Uint8Array | null> {
     const L = this.layout;
