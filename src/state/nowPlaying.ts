@@ -144,7 +144,13 @@ async function follow(s: SystemState) {
   if (names.art) return;
   // the cover arrives a moment later; swap it in without reloading the song. The catalogue's
   // (sharp) one when it surely is this song; otherwise the one Spotify shows in the shared tab
-  const art = (await artworkFor(track.artist, track.title)) ?? (s.fuzzy ? ((await reader?.coverImage().catch(() => null)) ?? undefined) : undefined);
+  let art = await artworkFor(track.artist, track.title);
+  // Spotify loads a new song's cover a moment after the song changes: keep looking at the tab for
+  // a while (every 1.5 s, ~20 s) until there's one to copy
+  for (let i = 0; !art && s.fuzzy && i < 14 && songKey === key; i++) {
+    art = (await reader?.coverImage().catch(() => null)) ?? undefined;
+    if (!art) await new Promise((r) => setTimeout(r, 1500));
+  }
   if (art && songKey === key) {
     const st = playerStore.getState();
     const q = st.queue.map((t) => (t.id === track.id ? { ...t, artwork: art } : t));

@@ -372,7 +372,9 @@ export class SpotifyTabReader {
       .flatMap((b) => b.paragraphs.flatMap((p) => p.lines))
       .map((l) => ({
         text: l.words.filter((w) => w.confidence > 35).map((w) => w.text).join(' ').trim(),
-        x: l.bbox.x0,
+        // where the confidently read words start: a mark in the cover next to the text can join the
+        // line (stretching its box to the left) but reads as a low-confidence "word"
+        x: l.words.find((w) => w.confidence > 35)?.bbox.x0 ?? l.bbox.x0,
         y: l.bbox.y0,
         h: l.bbox.y1 - l.bbox.y0,
         conf: l.confidence,
@@ -398,7 +400,9 @@ export class SpotifyTabReader {
       under.find((l) => readableName(l.text));
     const artist = (a?.text ?? '').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{M}\p{N})]+$/gu, '');
     const bottom = a ? a.y + a.h : t.y + t.h;
-    return title ? { title, artist: readableName(artist) ? artist : '', conf: t.conf, x: t.x, top: t.y, bottom } : null;
+    // the text's left edge: stray marks only ever stretch a line leftwards, so the later of the two
+    const x = a && readableName(artist) ? Math.max(t.x, a.x) : t.x;
+    return title ? { title, artist: readableName(artist) ? artist : '', conf: t.conf, x, top: t.y, bottom } : null;
   }
 
   /**
@@ -623,41 +627,68 @@ export class SpotifyTabReader {
       return d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11;
     };
     // the bar's background: the column right next to the text
-    let bg = 0;
-    for (let y = 0; y < sh; y++) bg += lum(sw - 1, y);
-    bg /= sh;
-    const differs = (x: number, y: number) => Math.abs(lum(x, y) - bg) > 14;
+    // (the median: the column also crosses the page above the bar, which mustn't tint it)
+    const col: number[] = [];
+    for (let y = 0; y < sh; y++) col.push(lum(sw - 1, y));
+    col.sort((p, q) => p - q);
+    const bg = col[col.length >> 1];
+    // fine enough to tell a dark cover from Spotify's black bar (the captured picture isn't
+    // compressed, so the bar itself is perfectly even)
+    const differs = (x: number, y: number) => Math.abs(lum(x, y) - bg) > 4;
+    const mid = Math.min(sh - 1, Math.max(0, Math.round(cy - sy)));
+    // columns are judged on the rows level with the text only: higher up is the page above
+    // Spotify's bar, which would make the empty bar beside the cover count as cover
+    const y0 = Math.max(0, Math.round(mid - block * 0.8));
+    const y1 = Math.min(sh - 1, Math.round(mid + block * 0.8));
     const colHits = (x: number) => {
       let n = 0;
-      for (let y = 0; y < sh; y++) if (differs(x, y)) n++;
-      return n / sh;
+      for (let y = y0; y <= y1; y++) if (differs(x, y)) n++;
+      return n / (y1 - y0 + 1);
     };
     // the cover: the run of "different" columns nearest the text
-    let right = -1;
-    for (let x = sw - 1; x >= 0; x--) if (colHits(x) > 0.3) {
-      right = x;
-      break;
-    }
-    if (right < 0) return null;
-    let left = right;
-    while (left > 0 && colHits(left - 1) > 0.15) left--;
-    const width = right - left + 1;
-    if (width < block * 0.8) return null;
-    const rowHits = (y: number) => {
-      let n = 0;
-      for (let x = left; x <= right; x++) if (differs(x, y)) n++;
-      return n / width;
+    /** the cover found from the picture: the run of columns, then rows, that differ from the bar */
+    const detect = () => {
+      let right = -1;
+      for (let x = sw - 1; x >= 0; x--) if (colHits(x) > 0.3) {
+        right = x;
+        break;
+      }
+      if (right < 0) return null;
+      let left = right;
+      while (left > 0 && colHits(left - 1) > 0.15) left--;
+      const width = right - left + 1;
+      if (width < block * 0.8) return null;
+      const rowHits = (y: number) => {
+        let n = 0;
+        for (let x = left; x <= right; x++) if (differs(x, y)) n++;
+        return n / width;
+      };
+      // grow out from the text's middle row, stopping at plain background: whatever lies beyond it
+      // (the page above Spotify's bar) isn't part of the cover
+      let top = mid;
+      let bottom = mid;
+      while (top > 0 && rowHits(top - 1) >= 0.3) top--;
+      while (bottom < sh - 1 && rowHits(bottom + 1) >= 0.3) bottom++;
+      const height = bottom - top + 1;
+      // a cover is square: otherwise this isn't one
+      if (height < width * 0.75 || height > width * 1.33) return null;
+      return { left, top, width, height };
     };
-    // grow out from the text's middle row, stopping at plain background: whatever lies beyond it
-    // (the page above Spotify's bar) isn't part of the cover
-    const mid = Math.min(sh - 1, Math.max(0, Math.round(cy - sy)));
-    let top = mid;
-    let bottom = mid;
-    while (top > 0 && rowHits(top - 1) >= 0.3) top--;
-    while (bottom < sh - 1 && rowHits(bottom + 1) >= 0.3) bottom++;
-    const height = bottom - top + 1;
-    // a cover is square: otherwise this isn't one
-    if (height < width * 0.75 || height > width * 1.33) return null;
+    // A dark cover on Spotify's black bar can't be told apart from it: then go by the layout — the
+    // cover is a square ~1.8× as tall as the title + artist lines, centred on them, ending ~0.4×
+    // that height before the title starts (Spotify's 56 px cover, 14 px gap, 14 + 11 px text)
+    const layout = () => {
+      const side = Math.round(block * 1.78);
+      const right = Math.round(nb.x - block * 0.41) - sx;
+      const top = Math.round(mid - side / 2);
+      if (right - side < 0 || top < 0 || top + side > sh) return null;
+      return { left: right - side, top, width: side, height: side };
+    };
+    const box = detect() ?? layout();
+    if (!box) return null;
+    const { left, top, width, height } = box;
+    const right = left + width - 1;
+    const bottom = top + height - 1;
     // blank (no picture loaded yet): not worth showing — a plain-coloured cover still counts
     let sum = 0;
     let sq = 0;
